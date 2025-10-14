@@ -1,6 +1,6 @@
 
 #Socket:
-#Debe comunicarse con Central para la autenticación y autorización
+#Debe comunicarse con Central para la autenticacion y autorizacion
 #Debe comunicarse con Central para informar del estado del Punto de Carga
 
 import socket
@@ -15,7 +15,7 @@ def authenticate(cp_id):
             client_socket.connect((SERVER, PORT))
             print(f"[+] Conectado al servidor {SERVER}:{PORT}")
 
-            # Enviar mensaje de autenticación
+            # Enviar mensaje de autenticacion
             mensaje = f"AUTENTICACION:{cp_id}"
             client_socket.sendall(mensaje.encode('utf-8'))
             print(f"Enviado: {mensaje}")
