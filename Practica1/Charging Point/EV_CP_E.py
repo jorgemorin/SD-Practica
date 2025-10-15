@@ -1,4 +1,4 @@
-#Permance a la espera hasta recibir una señal de Central
+#Permance a la espera hasta recibir una senal de Central
 #Debe comunicarse con Monitor para recibir su ID y Monitor debe comunicarse con Central para validar el ID
 
 import socket
