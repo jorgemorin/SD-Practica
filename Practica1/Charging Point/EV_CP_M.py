@@ -46,11 +46,7 @@ def authenticate(cp_id):
         return False
 
 #CONEXION PARA REGISTRO CON CENTRAL
-def register(cp_id,ubicacion,precio):
-    if  (len(sys.argv) == 4):
-        SERVER = sys.argv[1]
-        PORT = int(sys.argv[2])
-        ADDR = (SERVER, PORT)
+def register(ubicacion,precio):
 
     try:
         # Crear socket TCP
@@ -59,22 +55,22 @@ def register(cp_id,ubicacion,precio):
         # Conectar al servidor
         client_socket.connect((SERVER, PORT))
         print("[+] Conectado al servidor.")
-        mensaje = f"{"REGISTRO:" +":"+ cp_id +":"+ ubicacion +":"+ precio}"
+        mensaje = f"{"REGISTRO" +":"+ ubicacion +":"+ precio}"
         client_socket.sendall(mensaje.encode())
         respuesta = client_socket.recv(1024).decode()
-        if respuesta == "ACEPTADO:"+cp_id:
+        print(f"Respuesta del servidor: {respuesta}")
+        if "ACEPTADO" in respuesta:
+            parts = respuesta.split(':')		# ":" is the delimiter
+            msg_type = parts[0].upper()	
+            current_cp_id = parts[1]
             print("Registro exitoso.")
-            return True
+            return current_cp_id
         else:
-            print("Registo fallido.")
             client_socket.close()
-            return False
+            return 0
     except Exception as e:
         print(f"[Error] {e}")
 
-    finally:
-        client_socket.close()
-        return False
 
 #CONEXION PARA REPORTAR ESTADO A ENGINE 
 def report_status(cp_id,estado):
@@ -103,12 +99,11 @@ def main():
 
     SERVER = sys.argv[1]
     PORT = int(sys.argv[2])
-    cp_id = sys.argv[3]
         
+    CP_ID = register("Calle Falsa 123","0.20")
+    if CP_ID == 0:
+        print("[X] Registro fallido. Saliendo.")
+        return
 
-
-
-
-
-
-
+if __name__ == "__main__":
+    main()

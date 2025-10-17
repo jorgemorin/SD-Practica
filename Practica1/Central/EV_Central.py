@@ -27,7 +27,7 @@ if len(sys.argv) >= 2:
 else:
 	PORT_SOCKET = 5000
 
-HOST = '0.0.0.0'
+HOST = '127.0.0.1'
 FORMAT = 'utf-8'
 
 # ====================================================================== #
@@ -65,10 +65,10 @@ def handle_client(conn, addr):
 
 	try:
 		while True:
-			data = conn.recv(1024).decode(FORMAT)	# Read data from the message sent by the client
+			data = conn.recv(1024)	# Read data from the message sent by the client
 			if not data:
 				break	# If there is no data, the client has disconnected
-
+			
 			message = parse_protocol(data)
 			if message is None:
 				continue
@@ -82,12 +82,11 @@ def handle_client(conn, addr):
 			msg_type = parts[0].upper()		
 
 			# [2.1] Proceso de REGISTRO
-			if msg_type == "REGISTRO" and len(parts) >= 4:
-				# [FORMATO] : REGISTRO:ID:UBICACION:PRECIO
-				current_cp_id = parts[1]
-				location = parts[2]
-				price = parts[3]
-
+			if msg_type == "REGISTRO" and len(parts) >= 3:
+				# [FORMATO] : REGISTRO:UBICACION:PRECIO
+				current_cp_id = len(cp_registry)
+				location = parts[1]
+				price = parts[2]
 				# Validate and save the registration in the Database
 				try:
 					price_f = float(price)
@@ -98,13 +97,13 @@ def handle_client(conn, addr):
 						'address': addr
 					}
 					# [FORMATO ENVIADO] : ACEPTADO:ID
-					reponse = build_protocol_response("ACEPTADO", current_cp_id)
+					response = build_protocol_response("ACEPTADO", current_cp_id)
 					print("[SERVER] Charging Point registered:", cp_registry[current_cp_id])
 				except ValueError:
 					response = build_protocol_response("RECHAZADO", "Invalid price format")
 					print("[ERROR] Invalid price format from", addr)
 
-				conn.sendall(reponse)
+				conn.sendall(response)
 
 			# [2.2] Proceso de ACTUALIZACION DE ESTADO
 			elif msg_type == "ESTADO" and len(parts) >= 3:
