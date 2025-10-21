@@ -1,109 +1,146 @@
 
 #Socket:
 #Debe comunicarse con Central para la autenticacion y autorizacion
-#Debe comunicarse con Central para informar del estado del Punto de Carga
-
 import socket
 import sys
+import threading
+import time
 
 
-#CONEXION PARA AUTENTICACION CON CENTRAL
+SERVER = ""
+PORT = 0
+averia_activa = False
+
+
+def report_status_to_central(cp_id, status):
+    """
+    Notifica a CENTRAL solo si el estado de avería ha cambiado.
+    """
+    global averia_activa
+    
+    # Comprueba si realmente hay un cambio de estado que notificar
+    should_report = (status == "AVERIADO" and not averia_activa) or \
+                    (status == "ACTIVADO" and averia_activa)
+
+    if should_report:
+        print(f"--- [CAMBIO DE ESTADO] El CP ahora está {status}. Notificando a CENTRAL. ---")
+        send_to_central(f"ESTADO:{cp_id}:{status}")
+        # Actualizamos el estado global para no volver a notificar lo mismo
+        averia_activa = (status == "AVERIADO")
+
+
+def watchmen_thread(cp_id, engine_ip, engine_port):
+    """
+    Este es el HILO VIGILANTE. Se ejecuta en bucle para comprobar la salud del Engine.
+    """
+    while True:
+        try:
+            # Intenta conectar con el Engine
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s_engine:
+                s_engine.settimeout(2)  # Si no responde en 2 segundos, consideramos que hay un fallo
+                s_engine.connect((engine_ip, engine_port))
+                
+                # Si la conexión tiene éxito, significa que el Engine está VIVO.
+                # Llamamos a nuestra función para que notifique a CENTRAL si veníamos de un estado de avería.
+                report_status_to_central(cp_id, "ACTIVADO")
+        
+        except (socket.timeout, ConnectionRefusedError):
+            # Si la conexión falla (timeout) o es rechazada, el Engine está CAÍDO.
+            # Notificamos a CENTRAL (si no lo hemos hecho ya).
+            report_status_to_central(cp_id, "AVERIADO")
+        
+        # Espera 1 segundo antes de la siguiente comprobación
+        time.sleep(1)
+
+
+def send_to_central(message):
+    """
+    Función genérica para enviar un mensaje a CENTRAL y recibir una respuesta.
+    Esta reemplaza la lógica repetida en authenticate() y register().
+    """
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(5)  # Timeout de 5 segundos
+            s.connect((SERVER, PORT))
+            s.sendall(message.encode('utf-8'))
+            response = s.recv(1024).decode('utf-8').strip()
+            return response
+    except Exception as e:
+        print(f"[ERROR] No se pudo comunicar con CENTRAL: {e}")
+        return f"ERROR_COMUNICACION: {e}"
+
+
 def authenticate(cp_id):
-     try:
-        # Crear y conectar el socket TCP
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
-            client_socket.connect((SERVER, PORT))
-            print(f"[+] Conectado al servidor {SERVER}:{PORT}")
-
-            # Enviar mensaje de autenticacion
-            mensaje = f"AUTENTICACION:{cp_id}"
-            client_socket.sendall(mensaje.encode('utf-8'))
-            print(f"Enviado: {mensaje}")
-
-            # Recibir respuesta
-            respuesta = client_socket.recv(1024).decode('utf-8').strip()
-            print(f"Respuesta recibida: {respuesta}")
-
-            # Procesar respuesta
-            if respuesta == f"ACEPTADO:{cp_id}":
-                print("[OK] Autenticacion exitosa.")
-                return True
-            elif respuesta.startswith("RECHAZADO:"):
-                print(f"[X] Autenticacion rechazada: {respuesta}")
-                return False
-            else:
-                print(f"[?] Respuesta desconocida del servidor: {respuesta}")
-                return False
-
-     except ConnectionRefusedError:
-        print(f"[ERROR] No se pudo conectar al servidor {SERVER}:{PORT} (Conexion rechazada).")
-        return False
-     except socket.error as e:
-        print(f"[ERROR] Error de socket: {e}")
-        return False
-     except Exception as e:
-        print(f"[ERROR] Excepcion inesperada: {e}")
+    mensaje = f"AUTENTICACION:{cp_id}"
+    respuesta = send_to_central(mensaje)
+    
+    if respuesta == f"ACEPTADO:{cp_id}":
+        print("[OK] Autenticacion exitosa.")
+        return True
+    else:
+        print(f"[X] Autenticacion rechazada: {respuesta}")
         return False
 
 #CONEXION PARA REGISTRO CON CENTRAL
-def register(ubicacion,precio):
+def register(cp_id, ubicacion, precio):
+    """Usa la función genérica para enviar el registro."""
+    # Arreglamos el formato del mensaje que estaba incorrecto
+    mensaje = f"REGISTRO:{cp_id}:{ubicacion}:{precio}"
+    respuesta = send_to_central(mensaje)
 
-    try:
-        # Crear socket TCP
-        client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
-        # Conectar al servidor
-        client_socket.connect((SERVER, PORT))
-        print("[+] Conectado al servidor.")
-        mensaje = f"{"REGISTRO" +":"+ ubicacion +":"+ precio}"
-        client_socket.sendall(mensaje.encode())
-        respuesta = client_socket.recv(1024).decode()
-        print(f"Respuesta del servidor: {respuesta}")
-        if "ACEPTADO" in respuesta:
-            parts = respuesta.split(':')		# ":" is the delimiter
-            msg_type = parts[0].upper()	
-            current_cp_id = parts[1]
-            print("Registro exitoso.")
-            return current_cp_id
-        else:
-            client_socket.close()
-            return 0
-    except Exception as e:
-        print(f"[Error] {e}")
+    if "ACEPTADO" in respuesta:
+        print("Registro exitoso.")
+        return True
+    else:
+        print(f"Registro fallido: {respuesta}")
+        return False
 
 
-#CONEXION PARA REPORTAR ESTADO A ENGINE 
-def report_status(cp_id,estado):
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
-            client_socket.connect((SERVER, PORT))
-            mensaje = f"SALUD:{cp_id}:{estado}"
-            print(f"[Monitor {cp_id}] -> Enviando a Central: {mensaje}")
-            client_socket.sendall(mensaje.encode('utf-8'))
 
-            respuesta = client_socket.recv(1024).decode('utf-8')
-            print(f"[Monitor {cp_id}] <- Respuesta: {respuesta}")
+def __main__():
+    global SERVER, PORT 
 
-            if respuesta.startswith("CONFIRMADO"):
-                print(f"[Monitor {cp_id}] Estado de salud confirmado por Central.")
-            elif respuesta.startswith("RECHAZADO"):
-                print(f"[Monitor {cp_id}] Reporte de salud rechazado: {respuesta}")
-            else:
-                print(f"[Monitor {cp_id}] Respuesta desconocida: {respuesta}")
-
-    except Exception as e:
-        print(f"[Error en reporte de salud] {e}")
-
-def main():
-    global SERVER, PORT
+    if len(sys.argv) != 6:
+        print("Uso: python EV_CP_M.py <IP_CENTRAL> <PUERTO_CENTRAL> <IP_ENGINE> <PUERTO_ENGINE> <ID_CP>")
+        return
 
     SERVER = sys.argv[1]
     PORT = int(sys.argv[2])
+    engine_ip = sys.argv[3]
+    engine_port = int(sys.argv[4])
+    CP_ID = sys.argv[5]
+
+    if authenticate(CP_ID):
+        print(f"[OK] Punto de carga {CP_ID} autenticado.")
         
-    CP_ID = register("Calle Falsa 123","0.20")
-    if CP_ID == 0:
-        print("[X] Registro fallido. Saliendo.")
-        return
+    else:
+        print(f"[X] Autenticacion fallida para {CP_ID}. ¿Quieres registrarlo? (S/N)")
+        response = input()
+        if response.lower() == 's':
+            ubicacion = input("Ingrese la ubicacion del Punto de Carga: ")
+            precio = input("Ingrese el precio por kWh: ")
+            if not register(CP_ID, ubicacion, precio):
+                print("Registro fallido. Saliendo...")
+        elif response.lower() == 'n':
+            print("Saliendo...")
+            return
+        else:
+            print("Respuesta no valida. Saliendo...")
+            return
+        print(f"\n[INFO] Iniciando vigilancia continua del Engine en {engine_ip}:{engine_port}")
+    
+    #Hilo vigilante para monitorizar el Engine
+    watchmen = threading.Thread(
+        target=watchmen_thread, 
+        args=(CP_ID, engine_ip, engine_port), 
+        daemon=True #Segundo Plano
+    )
+    try:
+        # Mantener el programa activo
+        while True:
+            time.sleep(10) 
+    except KeyboardInterrupt:
+        print("\nCerrando Monitor...")
 
 if __name__ == "__main__":
-    main()
+    __main__()
