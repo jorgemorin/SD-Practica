@@ -3,11 +3,11 @@
 # EV_Central
 
 # Sockets:
-# - Recepción de conexión de los Charging Points
+# - Recepci?n de conexi?n de los Charging Points
 
 # Recibe de los Charging Points:
 # - ID del punto de recarga
-# - Ubicación del punto de recarga
+# - Ubicaci?n del punto de recarga
 # - Precio que tiene el suministro
 # - Estado (Activado/Parado/Suministrando/Averiado/Desconectado)
 
