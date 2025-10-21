@@ -123,10 +123,10 @@ def handle_client(conn, addr):
 
 			# [2.1] Proceso de REGISTRO
 			if msg_type == "REGISTRO" and len(parts) >= 3:
-				# [FORMATO] : REGISTRO:UBICACION:PRECIO
-				current_cp_id = len(cp_registry)
-				location = parts[1]
-				price = parts[2]
+				# [FORMATO] : REGISTRO:ID:UBICACION:PRECIO
+				current_cp_id = parts[1]
+				location = parts[2]
+				price = parts[3]
 				# Validate and save the registration in the Database
 				try:
 					price_f = float(price)
@@ -170,7 +170,7 @@ def handle_client(conn, addr):
 			# [2.3] Proceso de AUTENTICACION
 			elif msg_type == "AUTENTICACION" and len(parts) >= 2:
 				# [FORMATO] : AUTENTICACION:ID
-				cp_id_auth = int(parts[1])
+				cp_id_auth = parts[1]
 				if cp_id_auth in cp_registry:
 					response = build_protocol_response("ACEPTADO", cp_id_auth)
 					print(f"[SERVER] Charging Point {cp_id_auth} authenticated.")

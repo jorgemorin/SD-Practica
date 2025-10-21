@@ -121,13 +121,15 @@ def __main__():
             precio = input("Ingrese el precio por kWh: ")
             if not register(CP_ID, ubicacion, precio):
                 print("Registro fallido. Saliendo...")
+                return
         elif response.lower() == 'n':
             print("Saliendo...")
             return
         else:
             print("Respuesta no valida. Saliendo...")
             return
-        print(f"\n[INFO] Iniciando vigilancia continua del Engine en {engine_ip}:{engine_port}")
+    
+    print(f"\n[INFO] Iniciando vigilancia continua del Engine en {engine_ip}:{engine_port}")
     
     #Hilo vigilante para monitorizar el Engine
     watchmen = threading.Thread(
