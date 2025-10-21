@@ -35,6 +35,46 @@ FORMAT = 'utf-8'
 # ====================================================================== #
 cp_registry = {}
 
+def read_data():
+	"""================================================"""
+	""" Reading data from DataBase.txt		           """
+	"""================================================"""
+	try:
+		file = open("DataBase.txt", "r")
+		for line in file:
+		# [FORMATO] : ID:UBICACION:PRECIO:ESTADO
+			parts = line.strip().split(':')
+			if len(parts) >= 4:
+				cp_id = parts[0]
+				location = parts[1]
+				price = float(parts[2])
+				status = parts[3]
+				cp_registry[cp_id] = {
+					"location": location,
+					"price": price,
+					"status": status
+				}
+		file.close()
+		print("[SERVER] Data loaded from DataBase.txt")
+	
+	except FileNotFoundError:
+		print("[WARNING] DataBase.txt not found. Starting with empty database.")
+
+def write_data():
+	"""================================================"""
+	""" Writing data to DataBase.txt		           """
+	"""================================================"""
+	try:
+		file = open("DataBase.txt", "w")
+		for cp_id, info in cp_registry.items():
+			line = f"{cp_id}:{info['location']}:{info['price']}:{info['status']}\n"
+			file.write(line)
+		file.close()
+		print("[SERVER] Data saved to DataBase.txt")
+	
+	except Exception as e:
+		print(f"[ERROR] Failed to write to DataBase.txt: {e}")
+
 # ====================================================================== #
 # Server functions
 # ====================================================================== #
@@ -98,6 +138,7 @@ def handle_client(conn, addr):
 					}
 					# [FORMATO ENVIADO] : ACEPTADO:ID
 					response = build_protocol_response("ACEPTADO", current_cp_id)
+					write_data()
 					print("[SERVER] Charging Point registered:", cp_registry[current_cp_id])
 				except ValueError:
 					response = build_protocol_response("RECHAZADO", "Invalid price format")
@@ -129,7 +170,7 @@ def handle_client(conn, addr):
 			# [2.3] Proceso de AUTENTICACION
 			elif msg_type == "AUTENTICACION" and len(parts) >= 2:
 				# [FORMATO] : AUTENTICACION:ID
-				cp_id_auth = parts[1]
+				cp_id_auth = int(parts[1])
 				if cp_id_auth in cp_registry:
 					response = build_protocol_response("ACEPTADO", cp_id_auth)
 					print(f"[SERVER] Charging Point {cp_id_auth} authenticated.")
@@ -179,4 +220,7 @@ if __name__ == "__main__":
 	server.bind(ADDR)
 
 	print("[SERVER] Starting server...")
+	print("[SERVER] Reading data from DataBase...")
+	read_data()
+
 	start()
