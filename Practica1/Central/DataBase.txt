@@ -1,0 +1,4 @@
+0:Calle Falsa 123:0.2:ACTIVO
+1:Calle Falsa 123:0.2:DESCONECTADO
+2:Calle Falsa 123:0.2:DESCONECTADO
+3:Calle Falsa 123:0.2:ACTIVO
