@@ -10,7 +10,10 @@ import time
 SERVER = ""
 PORT = 0
 averia_activa = False
+conectado=False
 
+def send_to_engine():
+    pass
 
 def report_status_to_central(cp_id, status):
     """
@@ -30,15 +33,13 @@ def report_status_to_central(cp_id, status):
 
 
 def watchmen_thread(cp_id, engine_ip, engine_port):
-    """
-    Este es el HILO VIGILANTE. Se ejecuta en bucle para comprobar la salud del Engine.
-    """
     while True:
         try:
             # Intenta conectar con el Engine
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s_engine:
                 s_engine.settimeout(2)  # Si no responde en 2 segundos, consideramos que hay un fallo
                 s_engine.connect((engine_ip, engine_port))
+                s_engine.sendall(b"AUTENTICADO")   
                 
                 # Si la conexión tiene éxito, significa que el Engine está VIVO.
                 # Llamamos a nuestra función para que notifique a CENTRAL si veníamos de un estado de avería.
@@ -64,6 +65,7 @@ def send_to_central(message):
             s.connect((SERVER, PORT))
             s.sendall(message.encode('utf-8'))
             response = s.recv(1024).decode('utf-8').strip()
+            conectado=True
             return response
     except Exception as e:
         print(f"[ERROR] No se pudo comunicar con CENTRAL: {e}")
@@ -83,8 +85,6 @@ def authenticate(cp_id):
 
 #CONEXION PARA REGISTRO CON CENTRAL
 def register(cp_id, ubicacion, precio):
-    """Usa la función genérica para enviar el registro."""
-    # Arreglamos el formato del mensaje que estaba incorrecto
     mensaje = f"REGISTRO:{cp_id}:{ubicacion}:{precio}"
     respuesta = send_to_central(mensaje)
 
@@ -112,7 +112,8 @@ def __main__():
 
     if authenticate(CP_ID):
         print(f"[OK] Punto de carga {CP_ID} autenticado.")
-        
+    elif not conectado:
+        return
     else:
         print(f"[X] Autenticacion fallida para {CP_ID}. ¿Quieres registrarlo? (S/N)")
         response = input()
@@ -137,10 +138,11 @@ def __main__():
         args=(CP_ID, engine_ip, engine_port), 
         daemon=True #Segundo Plano
     )
+    watchmen.start()
     try:
         # Mantener el programa activo
         while True:
-            time.sleep(10) 
+            time.sleep(10)
     except KeyboardInterrupt:
         print("\nCerrando Monitor...")
 
