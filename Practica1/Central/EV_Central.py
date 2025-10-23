@@ -11,9 +11,31 @@
 # - Precio que tiene el suministro
 # - Estado (Activado/Parado/Suministrando/Averiado/Desconectado)
 
+from kafka import KafkaConsumer
 import socket
 import threading
 import sys
+
+def read_consumer():
+    KAFKA_BROKER = ['localhost:9092'] 
+    KAFKA_TOPIC = 'EVCharging'
+    
+    try:
+        consumer = KafkaConsumer(
+            KAFKA_TOPIC,
+            bootstrap_servers=KAFKA_BROKER, 
+            auto_offset_reset='latest',
+            enable_auto_commit=True,
+			group_id='ev-central-group-1022-v3',
+            api_version=(4, 1, 0)
+        )
+        print("[KAFKA] Successfully connected and listening for messages.")
+        
+        for message in consumer:
+            print(f"[KAFKA] {message.value.decode('utf-8')}")
+            
+    except Exception as e:
+        print(f"[KAFKA] ERROR: Failed to connect to Kafka Broker: {e}")
 
 # ====================================================================== #
 # Server configuration and arguments management
@@ -34,13 +56,14 @@ FORMAT = 'utf-8'
 # Simulated Database
 # ====================================================================== #
 cp_registry = {}
+driver_registry = {}
 
-def read_data():
+def read_data_cp():
 	"""================================================"""
-	""" Reading data from DataBase.txt		           """
+	""" Reading data from ChargingPoints.txt		           """
 	"""================================================"""
 	try:
-		file = open("DataBase.txt", "r")
+		file = open("ChargingPoints.txt", "r")
 		for line in file:
 		# [FORMATO] : ID:UBICACION:PRECIO:ESTADO
 			parts = line.strip().split(':')
@@ -55,26 +78,28 @@ def read_data():
 					"status": status
 				}
 		file.close()
-		print("[SERVER] Data loaded from DataBase.txt")
+		print("[SERVER] Data loaded from ChargingPoints.txt")
 	
 	except FileNotFoundError:
-		print("[WARNING] DataBase.txt not found. Starting with empty database.")
+		print("[WARNING] ChargingPoints.txt not found. Starting with empty database.")
 
-def write_data():
+def write_data_cp():
 	"""================================================"""
-	""" Writing data to DataBase.txt		           """
+	""" Writing data to ChargingPoints.txt		           """
 	"""================================================"""
 	try:
-		file = open("DataBase.txt", "w")
+		file = open("ChargingPoints.txt", "w")
 		for cp_id, info in cp_registry.items():
 			line = f"{cp_id}:{info['location']}:{info['price']}:{info['status']}\n"
 			file.write(line)
 		file.close()
-		print("[SERVER] Data saved to DataBase.txt")
+		print("[SERVER] Data saved to ChargingPoints.txt")
 	
 	except Exception as e:
-		print(f"[ERROR] Failed to write to DataBase.txt: {e}")
+		print(f"[ERROR] Failed to write to ChargingPoints.txt: {e}")
 
+def read_data_drivers():
+	
 # ====================================================================== #
 # Server functions
 # ====================================================================== #
@@ -138,7 +163,7 @@ def handle_client(conn, addr):
 					}
 					# [FORMATO ENVIADO] : ACEPTADO:ID
 					response = build_protocol_response("ACEPTADO", current_cp_id)
-					write_data()
+					write_data_cp()
 					print("[SERVER] Charging Point registered:", cp_registry[current_cp_id])
 				except ValueError:
 					response = build_protocol_response("RECHAZADO", "Invalid price format")
@@ -215,12 +240,24 @@ def start():
 # Main
 # ====================================================================== #
 if __name__ == "__main__":
+	# 1. Inicialización de Socket (en el hilo principal)
 	server = socket.socket()
 	ADDR = (HOST, PORT_SOCKET)
 	server.bind(ADDR)
 
+	# 2. Hilo de Kafka (daemon)
+	kafka_thread = threading.Thread(target=read_consumer, daemon=True)
+	kafka_thread.start()
+	
 	print("[SERVER] Starting server...")
 	print("[SERVER] Reading data from DataBase...")
-	read_data()
-
-	start()
+	read_data_cp()
+	
+	# 3. Iniciar el servidor de Sockets
+	try:
+		start()
+	except KeyboardInterrupt:
+		print("\n[SERVER] Shutting down server...")
+		write_data_cp()
+		server.close()
+		sys.exit()
