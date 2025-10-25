@@ -16,26 +16,76 @@ import socket
 import threading
 import sys
 
+#MAL-Reenvia el mensaje por el mismo topic, entonces lo vuelve a interpretar el mismo Central, creo que debería crear otro topic y ponerlo a funcionar para las respuestas a los Drivers
+def send_request_decision_to_driver(driver_id, cp_id, decision):
+	KAFKA_BROKER = ['localhost:9092'] 
+	KAFKA_TOPIC = 'EVCharging'
+	
+	try:
+		from kafka import KafkaProducer
+		producer = KafkaProducer(
+			bootstrap_servers=KAFKA_BROKER,
+			api_version=(4, 1, 0),
+			request_timeout_ms=10001
+		)
+		message = f"REQUEST:{driver_id}:{cp_id}:{decision}"
+		future = producer.send(KAFKA_TOPIC, value=message.encode('utf-8'))
+		future.get(timeout=100)
+		print(f"[KAFKA] Sent decision to driver: {message}")
+		
+	except Exception as e:
+		print(f"[KAFKA] ERROR: Failed to send decision to driver: {e}")
+		
+	finally:
+		if 'producer' in locals():
+			producer.flush()
+			producer.close()
+
 def read_consumer():
-    KAFKA_BROKER = ['localhost:9092'] 
-    KAFKA_TOPIC = 'EVCharging'
+	KAFKA_BROKER = ['localhost:9092'] 
+	KAFKA_TOPIC = 'EVCharging'
     
-    try:
-        consumer = KafkaConsumer(
-            KAFKA_TOPIC,
-            bootstrap_servers=KAFKA_BROKER, 
-            auto_offset_reset='latest',
-            enable_auto_commit=True,
+	try:
+		consumer = KafkaConsumer(
+			KAFKA_TOPIC,
+			bootstrap_servers=KAFKA_BROKER, 
+			auto_offset_reset='latest',
+			enable_auto_commit=True,
 			group_id='ev-central-group-1022-v3',
-            api_version=(4, 1, 0)
-        )
-        print("[KAFKA] Successfully connected and listening for messages.")
+			api_version=(4, 1, 0),
+            request_timeout_ms=10001
+		)
+		print("[KAFKA] Successfully connected and listening for messages.")
         
-        for message in consumer:
-            print(f"[KAFKA] {message.value.decode('utf-8')}")
-            
-    except Exception as e:
-        print(f"[KAFKA] ERROR: Failed to connect to Kafka Broker: {e}")
+		for message in consumer:
+			print(f"[KAFKA] {message.value.decode('utf-8')}")
+			if message.value.decode('utf-8').startswith("DRIVER:"):
+				# El Driver se conecta (NO SE SI ES NECESARIO COMO TAL)
+				continue
+			elif message.value.decode('utf-8').startswith("REQUEST:"):
+				driver_id_received = message.value.decode('utf-8').split(':')[1]
+				cp_id_received = message.value.decode('utf-8').split(':')[2]
+
+				print("[DRIVER REQUEST] Driver ID:", driver_id_received, "Charging Point ID:", cp_id_received)
+				print("[DRIVER REQUEST] Checking Charging Point status...")
+				if cp_id_received in cp_registry:
+					print("[DRIVER REQUEST] Charging Point found in registry.")
+					cp_info = cp_registry[cp_id_received]
+					print("[DRIVER REQUEST] Charging Point status:", cp_info['status'])
+					if cp_info['status'] == 'ACTIVO':
+						print("[DRIVER REQUEST] Charging Point is ACTIVE. Accepting request.")
+						decision = 'ACEPTADO'
+					else:
+						print("[DRIVER REQUEST] Charging Point is not ACTIVE. Rejecting request.")
+						decision = 'RECHAZADO'
+				else:
+					print("[DRIVER REQUEST] Charging Point not found in registry. Rejecting request.")
+					decision = 'RECHAZADO'
+
+				send_request_decision_to_driver(driver_id_received, cp_id_received, decision)
+				
+	except Exception as e:
+		print(f"[KAFKA] ERROR: Failed to connect to Kafka Broker: {e}")
 
 # ====================================================================== #
 # Server configuration and arguments management
@@ -97,8 +147,6 @@ def write_data_cp():
 	
 	except Exception as e:
 		print(f"[ERROR] Failed to write to ChargingPoints.txt: {e}")
-
-def read_data_drivers():
 	
 # ====================================================================== #
 # Server functions

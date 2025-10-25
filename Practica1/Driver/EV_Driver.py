@@ -63,6 +63,31 @@ def request_service(DRIVER_ID, CP_ID, kafka_broker):
             producer.close()
             print("[KAFKA PRODUCER] Producer closed.")
     
+def receive_responses(kafka_broker):
+    from kafka import KafkaConsumer
+    consumer = None
+    try:
+        consumer = KafkaConsumer(
+            KAFKA_TOPIC,
+            bootstrap_servers=kafka_broker,
+            auto_offset_reset='earliest',
+            enable_auto_commit=True,
+            group_id='ev_driver_group',
+            api_version=(4, 1, 0)
+        )
+        print("[KAFKA CONSUMER] Successfully connected to broker.")
+        print("Listening for responses...")
+        for message in consumer:
+            print(f"[KAFKA] Received: {message.value.decode('utf-8')}")
+    except NoBrokersAvailable:
+        print("[KAFKA CONSUMER] ERROR: No Kafka brokers available. Check address and ensure Kafka is running.")
+    except Exception as e:
+        print(f"[KAFKA CONSUMER] ERROR: An unexpected error occurred: {e}")
+        
+    finally:
+        if consumer is not None:
+            consumer.close()
+            print("[KAFKA CONSUMER] Consumer closed.")
 
 def main():
     if len(sys.argv) != 4:
@@ -91,6 +116,7 @@ def main():
             return
 
         request_service(DRIVER_ID, CP_ID, KAFKA_BROKER)
+        receive_responses(KAFKA_BROKER)
 
 if __name__ == "__main__":
     main()
