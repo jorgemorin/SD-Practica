@@ -19,7 +19,7 @@ import sys
 #MAL-Reenvia el mensaje por el mismo topic, entonces lo vuelve a interpretar el mismo Central, creo que debería crear otro topic y ponerlo a funcionar para las respuestas a los Drivers
 def send_request_decision_to_driver(driver_id, cp_id, decision):
 	KAFKA_BROKER = ['localhost:9092'] 
-	KAFKA_TOPIC = 'EVCharging'
+	KAFKA_TOPIC = 'DriverResponse'
 	
 	try:
 		from kafka import KafkaProducer
@@ -43,7 +43,7 @@ def send_request_decision_to_driver(driver_id, cp_id, decision):
 
 def read_consumer():
 	KAFKA_BROKER = ['localhost:9092'] 
-	KAFKA_TOPIC = 'EVCharging'
+	KAFKA_TOPIC = 'DriverRequest'
     
 	try:
 		consumer = KafkaConsumer(

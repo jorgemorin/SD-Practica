@@ -2,9 +2,11 @@ from kafka import KafkaProducer
 from kafka.errors import NoBrokersAvailable
 import time
 import sys
+import threading
 
 # KAFKA_BROKER = ['localhost:9092']
-KAFKA_TOPIC = 'EVCharging'
+KAFKA_REQUEST = 'DriverRequest'
+KAFKA_RESPONSE = 'DriverResponse'
 
 #PUEDE QUE NO HAYA QUE USARLO
 def send_user_data(kafka_broker: list, driver_id: str):
@@ -19,7 +21,7 @@ def send_user_data(kafka_broker: list, driver_id: str):
 
         message = f"DRIVER:{driver_id}"
         
-        future = producer.send(KAFKA_TOPIC, value=message.encode('utf-8'))
+        future = producer.send(KAFKA_REQUEST, value=message.encode('utf-8'))
         future.get(timeout=100)
         
         print(f"[KAFKA] Sent: {message}")
@@ -47,7 +49,7 @@ def request_service(DRIVER_ID, CP_ID, kafka_broker):
         print("[KAFKA PRODUCER] Successfully connected to broker.")
         message = f"REQUEST:{DRIVER_ID}:{CP_ID}"
         
-        future = producer.send(KAFKA_TOPIC, value=message.encode('utf-8'))
+        future = producer.send(KAFKA_REQUEST, value=message.encode('utf-8'))
         future.get(timeout=100)
         
         print(f"[KAFKA] Sent: {message}")
@@ -63,22 +65,24 @@ def request_service(DRIVER_ID, CP_ID, kafka_broker):
             producer.close()
             print("[KAFKA PRODUCER] Producer closed.")
     
-def receive_responses(kafka_broker):
+def receive_responses(kafka_broker, driver_id, cp_id):
     from kafka import KafkaConsumer
     consumer = None
     try:
         consumer = KafkaConsumer(
-            KAFKA_TOPIC,
+            KAFKA_RESPONSE,
             bootstrap_servers=kafka_broker,
             auto_offset_reset='earliest',
             enable_auto_commit=True,
-            group_id='ev_driver_group',
-            api_version=(4, 1, 0)
+            group_id=f'ev_driver_group_{driver_id}',
+            api_version=(4, 1, 0),
+            request_timeout_ms=10001
         )
         print("[KAFKA CONSUMER] Successfully connected to broker.")
         print("Listening for responses...")
         for message in consumer:
-            print(f"[KAFKA] Received: {message.value.decode('utf-8')}")
+            if message.value.decode('utf-8').startswith(f"REQUEST:{driver_id}:{cp_id}"):
+                print(f"[KAFKA] Received: {message.value.decode('utf-8')}")
     except NoBrokersAvailable:
         print("[KAFKA CONSUMER] ERROR: No Kafka brokers available. Check address and ensure Kafka is running.")
     except Exception as e:
@@ -116,7 +120,15 @@ def main():
             return
 
         request_service(DRIVER_ID, CP_ID, KAFKA_BROKER)
-        receive_responses(KAFKA_BROKER)
+
+        consumer_thread = threading.Thread(target=receive_responses, args=(KAFKA_BROKER, DRIVER_ID, CP_ID), daemon=True)
+        consumer_thread.start()
+
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("Exiting...")
 
 if __name__ == "__main__":
     main()
