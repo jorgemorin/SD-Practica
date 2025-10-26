@@ -119,10 +119,12 @@ def main():
             print("ID de Charging Point invalido.")
             return
 
-        request_service(DRIVER_ID, CP_ID, KAFKA_BROKER)
-
+        # Primero iniciamos el consumidor en un hilo separado para escuchar respuestas. Lo ponemos antes que request_service para asegurarnos de no perdernos respuestas.
         consumer_thread = threading.Thread(target=receive_responses, args=(KAFKA_BROKER, DRIVER_ID, CP_ID), daemon=True)
         consumer_thread.start()
+
+        # Luego enviamos la solicitud de servicio
+        request_service(DRIVER_ID, CP_ID, KAFKA_BROKER)
 
     try:
         while True:

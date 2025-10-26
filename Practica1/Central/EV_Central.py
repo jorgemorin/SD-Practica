@@ -16,7 +16,6 @@ import socket
 import threading
 import sys
 
-#MAL-Reenvia el mensaje por el mismo topic, entonces lo vuelve a interpretar el mismo Central, creo que debería crear otro topic y ponerlo a funcionar para las respuestas a los Drivers
 def send_request_decision_to_driver(driver_id, cp_id, decision):
 	KAFKA_BROKER = ['localhost:9092'] 
 	KAFKA_TOPIC = 'DriverResponse'
@@ -75,12 +74,15 @@ def read_consumer():
 					if cp_info['status'] == 'ACTIVO':
 						print("[DRIVER REQUEST] Charging Point is ACTIVE. Accepting request.")
 						decision = 'ACEPTADO'
+						cp_registry[cp_id_received]['status'] = 'SUMINISTRANDO'
+						write_data_cp()
 					else:
 						print("[DRIVER REQUEST] Charging Point is not ACTIVE. Rejecting request.")
 						decision = 'RECHAZADO'
 				else:
 					print("[DRIVER REQUEST] Charging Point not found in registry. Rejecting request.")
 					decision = 'RECHAZADO'
+					
 
 				send_request_decision_to_driver(driver_id_received, cp_id_received, decision)
 				
