@@ -48,7 +48,7 @@ def watchmen_thread(cp_id, engine_ip, engine_port):
                 print(f"[Monitor {cp_id}] Conexión establecida con Engine.")
                 s_engine.settimeout(3) # Timeout más corto para las operaciones
                 
-                # Si hemos conectado, significa que el CP está (o vuelve a estar) activado
+                # Si hemos conectado, significa que el CP está (o vuelve a estar) ACTIVO
                 report_status_to_central(cp_id, "ACTIVO")
 
                 while True: # Bucle interno: envía health checks por la conexión existente.
@@ -68,7 +68,7 @@ def watchmen_thread(cp_id, engine_ip, engine_port):
                             report_status_to_central(cp_id, "AVERIADO")
                         else:
                             # El Engine está conectado y responde OK
-                            report_status_to_central(cp_id, "ACTIVADO")
+                            report_status_to_central(cp_id, "ACTIVO")
                         
                         # 3. Esperar 1 segundo
                         time.sleep(1)
