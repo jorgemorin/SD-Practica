@@ -16,14 +16,14 @@ def send_to_engine():
     pass
 
 def report_status_to_central(cp_id, status):
-    """
-    Notifica a CENTRAL solo si el estado de avería ha cambiado.
-    """
+    
+    #Notifica a CENTRAL si el estado de avería ha cambiado.
+
     global averia_activa
     
     # Comprueba si realmente hay un cambio de estado que notificar
     should_report = (status == "AVERIADO" and not averia_activa) or \
-                    (status == "ACTIVADO" and averia_activa)
+                    (status == "ACTIVO" and averia_activa)
 
     if should_report:
         print(f"--- [CAMBIO DE ESTADO] El CP ahora está {status}. Notificando a CENTRAL. ---")
@@ -49,7 +49,7 @@ def watchmen_thread(cp_id, engine_ip, engine_port):
                 s_engine.settimeout(3) # Timeout más corto para las operaciones
                 
                 # Si hemos conectado, significa que el CP está (o vuelve a estar) activado
-                report_status_to_central(cp_id, "ACTIVADO")
+                report_status_to_central(cp_id, "ACTIVO")
 
                 while True: # Bucle interno: envía health checks por la conexión existente.
                     try:
