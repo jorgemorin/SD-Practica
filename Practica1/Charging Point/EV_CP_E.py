@@ -29,6 +29,7 @@ def create_kafka_producer(kafka_ip_port_str):
     try:
         kafka_producer = KafkaProducer(
             bootstrap_servers=kafka_ip_port_str,
+            api_version=(4, 1, 0),
             # Le decimos cómo "escribir" los mensajes (convertir de diccionario a JSON)
             value_serializer=lambda v: json.dumps(v).encode('utf-8')
         )
@@ -169,6 +170,7 @@ def start_kafka_consumer_thread():
             'commands_to_cp', # <-- Topic de Kafka
             bootstrap_servers=kafka_ip_port_str, # <-- La dirección del servidor Kafka
             auto_offset_reset='latest', # <-- Solo los mensajes nuevos
+            api_version=(4, 1, 0),
             
             # Kafka envía texto raro. Esto le dice cómo convertir ese texto
             # en un diccionario Python que podamos entender (usando json).
