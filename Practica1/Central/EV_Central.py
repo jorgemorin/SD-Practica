@@ -2,6 +2,7 @@ from kafka import KafkaConsumer, KafkaProducer
 import socket
 import threading
 import sys
+import os
 import time
 from typing import List, Dict, Any, Optional, Tuple
 
@@ -26,7 +27,7 @@ FORMAT = 'utf-8'
 STATUS_ACTIVO = 'ACTIVO'           # VERDE
 STATUS_SUMINISTRANDO = 'SUMINISTRANDO' # VERDE con datos
 STATUS_PARADO = 'PARADO'           # NARANJA / Out of Order
-STATUS_AVERIA = 'AVERIA'           # ROJO
+STATUS_AVERIA = 'AVERIADO'           # ROJO
 STATUS_DESCONECTADO = 'DESCONECTADO' # GRIS
 
 # --- 2. DATA STRUCTURES (Simulated Database) ---
@@ -43,6 +44,63 @@ def parse_protocol(data: bytes) -> Optional[str]:
     except UnicodeDecodeError:
         print("[ERROR] Failed to decode message.")
         return None
+
+def reset_cp_state():
+    input_file = "ChargingPoints.txt"
+    output_file = "ChargingPoints.txt.tmp"
+    updated_lines = []
+    
+    try:
+        # 1. Leer el fichero original
+        with open(input_file, "r") as file:
+            for line in file:
+                line = line.strip()
+                if not line:
+                    continue
+                    
+                parts = line.split(':')
+                
+                # Formato esperado: ID:Localizacion:Precio:Estado
+                if len(parts) >= 4:
+                    cp_id = parts[0]
+                    location = parts[1]
+                    price = parts[2]
+                    status = parts[3].upper() # Convertir a mayusculas por si acaso
+                    
+                    # 2. Aplicar la logica de reseteo
+                    if status not in [STATUS_AVERIA, STATUS_PARADO]:
+                        new_status = STATUS_DESCONECTADO
+                    else:
+                        new_status = status # Mantener AVERIA o PARADO
+                        
+                    # 3. Construir la nueva linea
+                    updated_lines.append(f"{cp_id}:{location}:{price}:{new_status}\n")
+                else:
+                    print(f"[WARN] Linea mal formada omitida: {line}")
+                    
+    except FileNotFoundError:
+        print(f"[ERROR] No se encontro el fichero '{input_file}'. No se reseteo ningun estado.")
+        return
+    except Exception as e:
+        print(f"[ERROR] Ocurrio un error leyendo el fichero: {e}")
+        return
+
+    try:
+        # 4. Escribir en un fichero temporal
+        with open(output_file, "w") as file:
+            file.writelines(updated_lines)
+            
+        # 5. Reemplazar el fichero original de forma atomica (segura)
+        os.replace(output_file, input_file)
+        
+        print(f"[OK] Se han reseteado los estados en '{input_file}'.")
+        print(f"   {len(updated_lines)} CPs actualizados a DESCONECTADO (excepto AVERIADOS/PARADOS).")
+
+    except Exception as e:
+        print(f"[ERROR] Ocurrio un error escribiendo el fichero actualizado: {e}")
+        # Intentar borrar el temporal si algo salio mal
+        if os.path.exists(output_file):
+            os.remove(output_file)
 
 def read_data_cp():
     """Reads CP data from ChargingPoints.txt into cp_registry."""
@@ -277,7 +335,7 @@ def handle_client(conn, addr):
                     response = build_protocol_response("RECHAZADO", "Invalid price format")
                 conn.sendall(response)
 
-            elif msg_type == "ESTADO" and len(parts) >= 3:
+            elif msg_type == "ESTADO" and len(parts) >= 2:
                 # Logica de actualizacion de estado (AVERIA, PARADO, etc. - Punto 190)
                 cp_id_report = parts[1]
                 new_status = parts[2].upper()
@@ -286,7 +344,7 @@ def handle_client(conn, addr):
                     if new_status in valid_statuses:
                         # Punto 191: Si hay averia durante el suministro, finalizar inmediatamente
                         if new_status == STATUS_AVERIA and cp_registry[cp_id_report]["status"] == STATUS_SUMINISTRANDO:
-                            print(f"[SERVER] AVERiA detectada durante el suministro en CP {cp_id_report}. Finalizando...")
+                            print(f"[SERVER] AVERIA detectada durante el suministro en CP {cp_id_report}. Finalizando...")
                             # Logica de notificacion al conductor (requiere Driver ID, no disponible aqui)
                             # Simplificacion: se actualiza el estado, el conductor lo detectara por falta de telemetria/status
 
@@ -307,7 +365,10 @@ def handle_client(conn, addr):
                     response = build_protocol_response("ACEPTADO", cp_id_auth)
                     # Update address on successful re-authentication/connection
                     cp_registry[cp_id_auth]['addr'] = (addr[0], 5001) # Update IP from connection
+                    cp_registry[cp_id_auth]['status'] = STATUS_ACTIVO
                     print(f"[SERVER] Charging Point {cp_id_auth} authenticated and address updated.")
+                    
+                    write_data_cp()
                 else:
                     response = build_protocol_response("RECHAZADO", "Unknown ID")
                     print("[ERROR] Unknown ID from", addr)
@@ -358,6 +419,7 @@ if __name__ == "__main__":
     kafka_thread.start()
     
     print("[SERVER] Starting EV_Central...")
+    reset_cp_state()
     read_data_cp()
     
     try:
