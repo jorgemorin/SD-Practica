@@ -240,7 +240,7 @@ def start():
 # Main
 # ====================================================================== #
 if __name__ == "__main__":
-	# 1. Inicialización de Socket (en el hilo principal)
+	# 1. Inicializaci?n de Socket (en el hilo principal)
 	server = socket.socket()
 	ADDR = (HOST, PORT_SOCKET)
 	server.bind(ADDR)
