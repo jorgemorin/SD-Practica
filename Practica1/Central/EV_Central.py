@@ -70,10 +70,7 @@ def reset_cp_state():
                     status = parts[3].upper() # Convertir a mayusculas por si acaso
                     
                     # 2. Aplicar la logica de reseteo
-                    if status not in [STATUS_AVERIA, STATUS_PARADO]:
-                        new_status = STATUS_DESCONECTADO
-                    else:
-                        new_status = status # Mantener AVERIA o PARADO
+                    new_status = STATUS_DESCONECTADO
                         
                     # 3. Construir la nueva linea
                     updated_lines.append(f"{cp_id}:{location}:{price}:{new_status}\n")
@@ -306,13 +303,9 @@ def read_consumer():
                     )
 
                     message = f"TICKET:{cp_id}:{driver_id}:{kwh}:{cost}"
+                    print(f"[KAFKA] Enviando: {message}")
                     future = producer.send(KAFKA_RESPONSE_TOPIC, value=message.encode('utf-8'))
                     future.get(timeout=100)
-                else:
-                    tele_parts = message_str.split(':')
-                    if len(tele_parts) >= 4 and tele_parts[1] in cp_registry:
-                        cp_id, kwh, cost = tele_parts[1], tele_parts[2], tele_parts[3]
-                    print(f"[TELEMETRY] CP {cp_id}: Consumo={kwh}Kw, Importe={cost}")
             else:
                 print("[ERROR] Kafka")
 

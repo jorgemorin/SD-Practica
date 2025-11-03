@@ -136,6 +136,10 @@ def receive_responses(kafka_broker: List[str], driver_id: str):
                         SERVICE_CONCLUSION_EVENT.set()
                         global CURRENT_CHARGING_CP
                         CURRENT_CHARGING_CP = None
+                elif parts[0] == "TICKET":
+                    consumo = parts[2]
+                    importe = parts[3]
+                    print(f"[TICKET] Consumo: {consumo}Kwh ,Importe: {importe}$")
 
             elif message.topic == KAFKA_TELEMETRY:
                 # Format: CP_ID:CONSUMO:IMPORTE
