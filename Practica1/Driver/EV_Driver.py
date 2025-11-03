@@ -136,10 +136,19 @@ def receive_responses(kafka_broker: List[str], driver_id: str):
                         SERVICE_CONCLUSION_EVENT.set()
                         global CURRENT_CHARGING_CP
                         CURRENT_CHARGING_CP = None
-                elif parts[0] == "TICKET":
-                    consumo = parts[2]
-                    importe = parts[3]
-                    print(f"[TICKET] Consumo: {consumo}Kwh ,Importe: {importe}$")
+                elif parts[0] == "TICKET" and len(parts) >= 5 and parts[2] == driver_id:  
+                    cp_id_ticket = parts[1]  
+                    consumo = parts[3]  
+                    importe = parts[4]  
+                    print(f"[TICKET] Consumo: {consumo}Kwh, Importe: {importe}$")  
+                    
+                    # IMPORTANTE: Actualizar el estado para que main_menu_loop lo procese  
+                    with RESPONSE_LOCK:  
+                        RESPONSE_STATE["decision"] = 'TICKET'  
+                        RESPONSE_STATE["cp_id"] = cp_id_ticket  
+                    
+                    SERVICE_CONCLUSION_EVENT.set()  
+                    CURRENT_CHARGING_CP = None
 
             elif message.topic == KAFKA_TELEMETRY:
                 # Format: CP_ID:CONSUMO:IMPORTE

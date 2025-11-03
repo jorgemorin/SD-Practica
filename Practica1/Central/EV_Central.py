@@ -306,6 +306,11 @@ def read_consumer():
                     print(f"[KAFKA] Enviando: {message}")
                     future = producer.send(KAFKA_RESPONSE_TOPIC, value=message.encode('utf-8'))
                     future.get(timeout=100)
+
+                    if cp_registry[cp_id]['status'] != STATUS_AVERIA:
+                        cp_registry[cp_id]['status'] = STATUS_ACTIVO
+                        write_data_cp()
+
             else:
                 print("[ERROR] Kafka")
 
