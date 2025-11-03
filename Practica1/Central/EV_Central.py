@@ -12,6 +12,7 @@ KAFKA_REQUEST_TOPIC = 'DriverRequest'
 KAFKA_RESPONSE_TOPIC = 'DriverResponse'
 KAFKA_TELEMETRY_TOPIC = 'CPTelemetry' # NEW: Topic for CP monitoring (Punto 8)
 KAFKA_ENGINE_TOPIC = 'commands_to_cp'
+KAFKA_TICKET_TOPIC = 'TicketResponse'
 DEFAULT_KAFKA_BROKER = ['localhost:9092']
 
 # Kafka Timeout Optimization (ms)
@@ -289,6 +290,24 @@ def read_consumer():
                         send_request_decision_to_driver(driver_id_stop, cp_id_stop, "TICKET_ENVIADO")
                     else:
                         print(f"[KAFKA] Received STOP for CP {cp_id_stop} not in SUMINISTRANDO.")
+
+                elif message_str.startswith("TICKET:") and len(parts) >= 5:
+                    cp_id = parts[1]
+                    driver_id = parts[2]
+                    kwh = parts[3]
+                    cost = parts[4]
+
+                    producer = KafkaProducer(
+                        bootstrap_servers=DEFAULT_KAFKA_BROKER,
+                        api_version=(4, 1, 0),
+                        request_timeout_ms=FAST_INIT_TIMEOUT
+                    )
+
+                    message = f"TICKET:{cp_id}:{driver_id}:{kwh}:{cost}"
+                    future = producer.send(KAFKA_RESPONSE_TOPIC, value=message.encode('utf-8'))
+                    future.get(timeout=100)
+
+                    
 
             elif message.topic == KAFKA_TELEMETRY_TOPIC:
                 # Punto 8: Recibir Telemetria. Format: CP_ID:CONSUMO:IMPORTE
