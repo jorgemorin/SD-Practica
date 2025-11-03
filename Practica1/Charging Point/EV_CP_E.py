@@ -66,7 +66,7 @@ def start_supply_simulation_thread():
             # 4. Enviar a Kafka al topic de telemetría
             try:
                 # print(f"DEBUG: Enviando telemetría: {kwh} KWh") # (Descomentar para depurar)
-                kafka_producer.send('telemetry_from_cp', telemetry_message)
+                kafka_producer.send('CPTelemetry', telemetry_message)
             except Exception as e:
                 print(f"[ERROR-KAFKA] No se pudo enviar telemetría: {e}")
 
@@ -125,17 +125,11 @@ def user_interface_thread():
                     kwh = round(current_charge['kwh_consumed'], 2)
                     cost = round(kwh * precio_kwh, 2)
                     
-                    ticket_message = {
-                        "cp_id": cp_id,
-                        "status": "TICKET_FINAL",
-                        "driver_id": current_charge['driver_id'],
-                        "kwh_total": kwh,
-                        "cost_total": cost
-                    }
+                    ticket_message = f"TICKET:{cp_id}:{current_charge['driver_id']}:{kwh}:{cost}"
                     #Envío del ticket
                     try:
                         if kafka_producer:
-                            kafka_producer.send('telemetry_from_cp', ticket_message)
+                            kafka_producer.send('CPTelemetry', ticket_message)
                             print(f"[INFO] Ticket final enviado a CENTRAL: {kwh} KWh, {cost} €")
                     except Exception as e:
                         print(f"[ERROR] No se pudo enviar el ticket final: {e}")
