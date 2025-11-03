@@ -193,6 +193,9 @@ def process_file_requests(file_name: str, driver_id: str, kafka_broker: List[str
     global FILE_PROCESSOR_THREAD
     FILE_PROCESSOR_THREAD = None
 
+def show_cp_available():
+    print("CP DISPONIBLES")
+
 # --- 6. MAIN APPLICATION LOGIC ---
 def main_menu_loop(driver_id: str, kafka_broker: List[str]):
     """Main application loop to display the menu and handle user input."""
@@ -239,6 +242,9 @@ def main_menu_loop(driver_id: str, kafka_broker: List[str]):
             continue # Go back to the top of the loop to check for Kafka messages/status
 
         # 3. Display Menu and get user option
+
+        show_cp_available()
+
         print("\n================================================")
         print(f"DRIVER {driver_id}")
         print("================================================")

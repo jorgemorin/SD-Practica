@@ -11,6 +11,7 @@ from typing import List, Dict, Any, Optional, Tuple
 KAFKA_REQUEST_TOPIC = 'DriverRequest'
 KAFKA_RESPONSE_TOPIC = 'DriverResponse'
 KAFKA_TELEMETRY_TOPIC = 'CPTelemetry' # NEW: Topic for CP monitoring (Punto 8)
+KAFKA_ENGINE_TOPIC = 'commands_to_cp'
 DEFAULT_KAFKA_BROKER = ['localhost:9092']
 
 # Kafka Timeout Optimization (ms)
@@ -210,7 +211,11 @@ def _check_and_authorize_cp(driver_id_received: str, cp_id_received: str):
     Implements Central's logic to check CP availability (Punto 4).
     If ACTIVO, requests authorization from CP (via Sockets).
     """
-    decision = 'RECHAZADO'
+    producer = KafkaProducer(
+            bootstrap_servers=DEFAULT_KAFKA_BROKER,
+            api_version=(4, 1, 0),
+            request_timeout_ms=FAST_INIT_TIMEOUT
+    )
     
     print(f"[DRIVER REQUEST] Checking Charging Point status for {cp_id_received}...")
     if cp_id_received in cp_registry:
@@ -227,6 +232,12 @@ def _check_and_authorize_cp(driver_id_received: str, cp_id_received: str):
             cp_registry[cp_id_received]['status'] = STATUS_SUMINISTRANDO
             print(f"[DRIVER REQUEST] CP {cp_id_received} state changed to SUMINISTRANDO.")
             write_data_cp() # Save state change
+            message = f"START:{cp_id_received}:{driver_id_received}"
+            future = producer.send(KAFKA_ENGINE_TOPIC, value=message.encode('utf-8'))
+            future.get(timeout=100)
+            print(f"[KAFKA CENTRAL] Sent message to driver: {message}")
+
+            decision = 'RECHAZADO'
             #else:
             #    print("[DRIVER REQUEST] CP rejected the authorization (Socket response).")
             
