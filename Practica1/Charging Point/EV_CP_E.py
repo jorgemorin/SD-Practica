@@ -99,6 +99,24 @@ def user_interface_thread():
             if comando.strip().lower() == 'a':
                 simular_averia = True
                 print("\n[!!!] AVERÍA SIMULADA. Engine responderá KO.\n")
+                if current_charge["active"]:
+                    print(f"\n[!!!] SUMINISTRO INTERRUMPIDO POR AVERÍA para {current_charge['driver_id']}.\n")
+                    current_charge["active"] = False
+                    kwh = round(current_charge['kwh_consumed'], 2)
+                    cost = round(kwh * precio_kwh, 2)
+                    driver_id = current_charge['driver_id']
+                    
+                    ticket_message = f"TICKET:{cp_id}:{driver_id}:{kwh}:{cost}:AVERIA"
+                    try:
+                        if kafka_producer:
+                            kafka_producer.send('CPTelemetry', ticket_message)
+                            kafka_producer.flush() 
+                            print(f"[INFO] Informe final por avería enviado: {kwh} KWh, {cost} €")
+                    except Exception as e:
+                        print(f"[ERROR] No se pudo enviar el informe por avería: {e}")
+
+                    current_charge["driver_id"] = None
+                    charge_request_pending = False 
 
             elif comando.strip().lower() == 'r':
                 simular_averia = False
