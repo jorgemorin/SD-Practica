@@ -139,8 +139,12 @@ def receive_responses(kafka_broker: List[str], driver_id: str):
                 elif parts[0] == "TICKET" and len(parts) >= 5 and parts[2] == driver_id:  
                     cp_id_ticket = parts[1]  
                     consumo = parts[3]  
-                    importe = parts[4]  
-                    print(f"[TICKET] Consumo: {consumo}Kwh, Importe: {importe}$")  
+                    importe = parts[4]
+                    if parts[5]=="AVERIA":
+                          print("[ERROR] El punto de carga ha sufrido una averia")
+                          print(f"[TICKET_AVERIA] Consumo: {consumo}Kwh, Importe: {importe}$")
+                    else:
+                        print(f"[TICKET] Consumo: {consumo}Kwh, Importe: {importe}$")  
                     
                     # IMPORTANTE: Actualizar el estado para que main_menu_loop lo procese  
                     with RESPONSE_LOCK:  

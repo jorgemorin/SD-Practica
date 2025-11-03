@@ -243,6 +243,7 @@ def _check_and_authorize_cp(driver_id_received: str, cp_id_received: str):
             print(f"[DRIVER REQUEST] CP is unavailable ({cp_info['status']}). Rejecting.")
             
     else:
+        decision = 'RECHAZADO'
         print("[DRIVER REQUEST] Charging Point not found in registry. Rejecting.")
 
     # 4. Punto 4, 176: CENTRAL notifies the Driver (Kafka)
@@ -301,8 +302,10 @@ def read_consumer():
                         api_version=(4, 1, 0),
                         request_timeout_ms=FAST_INIT_TIMEOUT
                     )
-
-                    message = f"TICKET:{cp_id}:{driver_id}:{kwh}:{cost}"
+                    if len(parts)==6:
+                        message = f"TICKET:{cp_id}:{driver_id}:{kwh}:{cost}:AVERIA"
+                    else:
+                        message = f"TICKET:{cp_id}:{driver_id}:{kwh}:{cost}"
                     print(f"[KAFKA] Enviando: {message}")
                     future = producer.send(KAFKA_RESPONSE_TOPIC, value=message.encode('utf-8'))
                     future.get(timeout=100)
