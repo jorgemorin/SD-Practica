@@ -11,29 +11,51 @@ estado_actual = "DESCONOCIDO"
 mensaje_status = ""
 conectado = False
 
+# Colores ANSI para una visualización cómoda
+RESET = "\033[0m"
+BOLD = "\033[1m"
+GREEN = "\033[92m"
+RED = "\033[91m"
+YELLOW = "\033[93m"
+CYAN = "\033[96m"
+BLUE = "\033[94m"
+GRAY = "\033[90m"
+
 def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
 
 def render_screen(cp_id, engine_ip, engine_port):
     clear_screen()
-    print(f"╔══════════════════════════════════════════════════╗")
-    print(f"║     MONITOR DE PUNTO DE CARGA - {cp_id}          ║")
-    print(f"╠══════════════════════════════════════════════════╣")
-    print(f"║ CENTRAL: {SERVER}:{PORT:<33}║")
-    print(f"║ ENGINE : {engine_ip}:{engine_port:<33}║")
-    print(f"╠══════════════════════════════════════════════════╣")
-    print(f"║ ESTADO : {estado_actual:<40}║")
-    print(f"╠══════════════════════════════════════════════════╣")
-    print(f"║ {mensaje_status:<46}║")
-    print(f"╚══════════════════════════════════════════════════╝")
+    # Colores según estado
+    if estado_actual == "ACTIVO":
+        estado_color = f"{GREEN}{estado_actual}{RESET}"
+    elif estado_actual == "AVERIADO":
+        estado_color = f"{RED}{estado_actual}{RESET}"
+    elif estado_actual == "SUMINISTRANDO":
+        estado_color = f"{BLUE}{estado_actual}{RESET}"
+    else:
+        estado_color = f"{YELLOW}{estado_actual}{RESET}"
+
+    print(f"{CYAN}{'═'*60}{RESET}")
+    print(f"{BOLD}{' MONITOR DE PUNTO DE CARGA ':^60}{RESET}")
+    print(f"{CYAN}{'═'*60}{RESET}")
+    print(f"{BOLD}ID CP:{RESET} {cp_id}")
+    print(f"{BOLD}CENTRAL:{RESET} {SERVER}:{PORT}")
+    print(f"{BOLD}ENGINE :{RESET} {engine_ip}:{engine_port}")
+    print(f"{CYAN}{'-'*60}{RESET}")
+    print(f"{BOLD}ESTADO:{RESET} {estado_color}")
+    print(f"{CYAN}{'-'*60}{RESET}")
+    print(f"{BOLD}STATUS:{RESET} {mensaje_status}")
+    print(f"{CYAN}{'═'*60}{RESET}")
+    hora = time.strftime("%H:%M:%S")
+    print(f"{GRAY}Última actualización: {hora}{RESET}")
 
 def send_to_engine():
     pass
 
 def report_status_to_central(cp_id, status):
     global averia_activa, estado_actual, mensaje_status
-    should_report = (status == "AVERIADO" and not averia_activa) or (status == "ACTIVO" and averia_activa)
-    if should_report:
+    if status != estado_actual:
         mensaje_status = f"El CP ahora está {status}. Notificando a CENTRAL..."
         send_to_central(f"ESTADO:{cp_id}:{status}")
         averia_activa = (status == "AVERIADO")
@@ -62,10 +84,14 @@ def watchmen_thread(cp_id, engine_ip, engine_port):
                             estado_actual = "AVERIADO"
                             render_screen(cp_id, engine_ip, engine_port)
                             break
+
                         if "KO" in respuesta:
                             report_status_to_central(cp_id, "AVERIADO")
+                        elif "CHARGING" in respuesta:
+                            report_status_to_central(cp_id, "SUMINISTRANDO")
                         else:
                             report_status_to_central(cp_id, "ACTIVO")
+
                         render_screen(cp_id, engine_ip, engine_port)
                         time.sleep(1)
                     except (socket.timeout, socket.error):

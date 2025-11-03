@@ -14,6 +14,7 @@ kafka_producer = None
 cp_id = "CP_SIN_ID" 
 charge_request_pending = False
 precio_kwh = 0.0
+is_charging = False
 
 
 # Diccionario para manejar el estado de la carga actual
@@ -82,7 +83,7 @@ def user_interface_thread():
     #'a'/'r' para averías.
     #'e'/'d' para simular enchufe/desenchufe.
     
-    global simular_averia, charge_request_pending, current_charge, kafka_producer, cp_id, precio_kwh
+    global simular_averia, charge_request_pending, current_charge, kafka_producer, cp_id, precio_kwh, is_charging
     
     print("\n--- [CONSOLA DE SIMULACIÓN DEL CP] ---")
     print("Comandos disponibles en cualquier momento:")
@@ -98,6 +99,7 @@ def user_interface_thread():
             comando = input()
             if comando.strip().lower() == 'a':
                 simular_averia = True
+                is_charging = False
                 print("\n[!!!] AVERÍA SIMULADA. Engine responderá KO.\n")
                 if current_charge["active"]:
                     print(f"\n[!!!] SUMINISTRO INTERRUMPIDO POR AVERÍA para {current_charge['driver_id']}.\n")
@@ -125,6 +127,7 @@ def user_interface_thread():
             elif comando.strip().lower() == 'e':
 
                 if charge_request_pending:
+                    is_charging = True
                     charge_request_pending = False
                     current_charge["active"] = True
                     # Actualizamos la hora de inicio al momento real del enchufe
@@ -134,7 +137,7 @@ def user_interface_thread():
                     print("\n[!] No hay ninguna solicitud de carga pendiente. 'e' no hace nada.\n")
 
             elif comando.strip().lower() == 'd':
-
+                is_charging = False
                 if current_charge["active"]:
                     print(f"\n[<<<] VEHÍCULO DESENCHUFADO. Deteniendo suministro para {current_charge['driver_id']}.\n")
                     
@@ -293,9 +296,7 @@ def start_monitor_server():
         print(f"[ERROR-FATAL] El servidor del Monitor ha fallado: {e}")
 
 def handle_monitor_connection(conn, addr):
-    #Gestiona cada conexión del Monitor en un hilo separado.
-    #Responde OK o KO al HEALTH_CHECK.
-    global simular_averia
+    global simular_averia, is_charging
     print(f"[OK] Monitor conectado desde {addr}")
     
     try:
@@ -309,7 +310,10 @@ def handle_monitor_connection(conn, addr):
                 if simular_averia:
                     conn.sendall(b"KO: Falla simulada")
                 else:
-                    conn.sendall(b"OK")
+                    if is_charging:
+                        conn.sendall(b"CHARGING")
+                    else:
+                        conn.sendall(b"OK")
             else:
                 print(f"[WARN] Mensaje inesperado del Monitor: {mensaje}")
                 
