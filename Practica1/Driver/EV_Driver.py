@@ -287,8 +287,6 @@ def main():
     # Start the response listener thread (must be started first)
     consumer_thread = threading.Thread(target=receive_responses, args=(KAFKA_BROKER, DRIVER_ID), daemon=True)
     consumer_thread.start()
-    
-    time.sleep(2) # Give the consumer thread time to connect
 
     try:
         main_menu_loop(DRIVER_ID, KAFKA_BROKER)

@@ -152,7 +152,7 @@ def start_kafka_consumer_thread():
     
     #Hilo que espera órdenes de Central
 
-    global KAFKA_ADDR, current_charge, cp_id
+    global KAFKA_ADDR, current_charge, cp_id, charge_request_pending
     
     # Preparamos la dirección del servidor de Kafka
     kafka_ip_port_str = f"{KAFKA_ADDR[0]}:{KAFKA_ADDR[1]}"
@@ -164,15 +164,11 @@ def start_kafka_consumer_thread():
             'commands_to_cp', # <-- Topic de Kafka
             bootstrap_servers=kafka_ip_port_str, # <-- La dirección del servidor Kafka
             auto_offset_reset='latest', # <-- Solo los mensajes nuevos
-            api_version=(4, 1, 0),
-            
-            # Kafka envía texto raro. Esto le dice cómo convertir ese texto
-            # en un diccionario Python que podamos entender (usando json).
-            value_deserializer=lambda v: json.loads(v.decode('utf-8'))
+            api_version=(4, 1, 0)
         )
         print(f"[INFO] Consumidor de Kafka escuchando en ' xd '...")
         for message in consumer:
-            msg_str = message.value.strip()
+            msg_str = message.value.decode('utf-8')
             print(f"[KAFKA-RX] Mensaje (string) recibido: {msg_str}")
             
             # Troceamos el string por los dos puntos ':'

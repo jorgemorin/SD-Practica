@@ -237,11 +237,11 @@ def _check_and_authorize_cp(driver_id_received: str, cp_id_received: str):
             future.get(timeout=100)
             print(f"[KAFKA CENTRAL] Sent message to driver: {message}")
 
-            decision = 'RECHAZADO'
             #else:
             #    print("[DRIVER REQUEST] CP rejected the authorization (Socket response).")
             
         else:
+            decision = 'RECHAZADO'
             print(f"[DRIVER REQUEST] CP is unavailable ({cp_info['status']}). Rejecting.")
             
     else:
