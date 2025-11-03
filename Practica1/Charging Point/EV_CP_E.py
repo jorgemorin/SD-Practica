@@ -31,7 +31,7 @@ def create_kafka_producer(kafka_ip_port_str):
             bootstrap_servers=kafka_ip_port_str,
             api_version=(4, 1, 0),
             # Le decimos cómo "escribir" los mensajes (convertir de diccionario a JSON)
-            value_serializer=lambda v: json.dumps(v).encode('utf-8')
+            value_serializer=lambda v: v.encode('utf-8')
         )
         print(f"[INFO] Productor de Kafka conectado a {kafka_ip_port_str}")
     except Exception as e:
@@ -53,7 +53,7 @@ def start_supply_simulation_thread():
             
             # 1. Simular el paso de 1 segundo de carga
             # (Vamos a simular que carga 0.01 KWh cada segundo)
-            current_charge["kwh_consumed"] += precio_kwh/3600
+            current_charge["kwh_consumed"] += 0.01
             
             # 2. Calcular los valores actuales
             kwh = round(current_charge['kwh_consumed'], 2)
@@ -61,13 +61,7 @@ def start_supply_simulation_thread():
             driver = current_charge['driver_id']
             
             # 3. Construir el mensaje de telemetría 
-            telemetry_message = {
-                "cp_id": cp_id,
-                "status": "SUMINISTRANDO",
-                "driver_id": driver,
-                "kwh_consumed": kwh,  # Consumo en Kw (en este caso, KWh acumulados) [cite: 87]
-                "cost_euros": cost    # Importe en € [cite: 88]
-            }
+            telemetry_message = f"SUMINISTRANDO:{cp_id}:{kwh}:{cost}"
             
             # 4. Enviar a Kafka al topic de telemetría
             try:
@@ -178,44 +172,56 @@ def start_kafka_consumer_thread():
         )
         print(f"[INFO] Consumidor de Kafka escuchando en ' xd '...")
         for message in consumer:
-            data = message.value
-            print(f"[KAFKA-RX] Mensaje recibido: {data}")
+            msg_str = message.value.strip()
+            print(f"[KAFKA-RX] Mensaje (string) recibido: {msg_str}")
+            
+            # Troceamos el string por los dos puntos ':'
+            parts = msg_str.split(':')
+            
+            # Comprobación de seguridad: debe tener al menos 2 partes (COMANDO, CP_ID)
+            if len(parts) < 2:
+                print(f"[WARN] Mensaje mal formado, ignorando: {msg_str}")
+                continue
+                
+            command = parts[0]
+            target_cp = parts[1]
 
-            #Si el mensaje no es para este CP
-            if data.get("target_cp") != cp_id:
+            # --- 3. ¿Es para mí? ---
+            if target_cp != cp_id:
                 print(f"[KAFKA-RX] Mensaje ignorado, no es para mí ({cp_id})")
-                continue #Vuelve a la espera del mensaje
+                continue
 
-            #En caso de que si lo sea, leemos el comando para ejecutarlo
-            command = data.get("command")
-
+            # --- 4. Sí, ¡es para mí! ¿Qué hago? ---
             if command == "START":
-                # Comprobamos si NO estamos cargando ya
-                if not current_charge["active"] and not charge_request_pending:
-                    driver = data.get("driver_id", "DriverDesconocido")
-                    
-                    current_charge["driver_id"] = driver
-                    current_charge["start_time"] = time.time() 
-                    current_charge["kwh_consumed"] = 0.0
+                # Comprobamos que el mensaje START tenga las 3 partes
+                if len(parts) == 3:
+                    if not current_charge["active"] and not charge_request_pending:
+                        driver = parts[2] # El driver es la tercera parte
+                        
+                        current_charge["driver_id"] = driver
+                        current_charge["start_time"] = time.time() 
+                        current_charge["kwh_consumed"] = 0.0
+                        charge_request_pending = True
 
-                    # Cambiamos el estado
-                    charge_request_pending = True
-
-                    print(f"\n[!!!] SOLICITUD DE CARGA RECIBIDA para {driver} [!!!]")
-                    print(f"[..._] Pulse 'e' para ENCHUFAR el vehículo.")
-
+                        print(f"\n[!!!] SOLICITUD DE CARGA RECIBIDA para {driver} [!!!]")
+                        print(f"[..._] Pulse 'e' para ENCHUFAR el vehículo.")
+                    else:
+                        print(f"[WARN] Se recibió START, pero ya estaba cargando.")
                 else:
-                    print(f"[WARN] Se recibió START, pero ya estaba cargando.")
-
+                    print(f"[WARN] Mensaje START mal formado, falta driver_id: {msg_str}")
+            
             elif command == "STOP":
+                # El comando STOP puede venir de CENTRAL y no tener driver_id
                 if current_charge["active"] or charge_request_pending:
                     print(f"\n[!!!] FIN DE CARGA (orden central) para {current_charge['driver_id']} [!!!]\n")
                     current_charge["active"] = False
                     charge_request_pending = False
-                    current_charge["driver_id"] = None                   
-
+                    current_charge["driver_id"] = None
                 else:
                     print(f"[WARN] Se recibió STOP, pero no estaba cargando.")
+            
+            else:
+                print(f"[WARN] Comando desconocido: {command}")
         
     except Exception as e:
         print(f"[ERROR-FATAL] El consumidor de Kafka ha fallado: {e}")
