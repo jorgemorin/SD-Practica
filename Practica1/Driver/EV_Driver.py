@@ -140,7 +140,7 @@ def receive_responses(kafka_broker: List[str], driver_id: str):
                     cp_id_ticket = parts[1]  
                     consumo = parts[3]  
                     importe = parts[4]
-                    if parts[5]=="AVERIA":
+                    if len(parts)==6 and parts[5]=="AVERIA":
                           print("[ERROR] El punto de carga ha sufrido una averia")
                           print(f"[TICKET_AVERIA] Consumo: {consumo}Kwh, Importe: {importe}$")
                     else:
@@ -153,6 +153,9 @@ def receive_responses(kafka_broker: List[str], driver_id: str):
                     
                     SERVICE_CONCLUSION_EVENT.set()  
                     CURRENT_CHARGING_CP = None
+                elif parts[0] == "CP_LIST":
+                    print("\n<<< PUNTOS DE CARGA ACTIVOS RECIBIDOS >>>")
+                    print(f"  {response_str[8:]}")
 
             elif message.topic == KAFKA_TELEMETRY:
                 # Format: CP_ID:CONSUMO:IMPORTE
@@ -193,7 +196,7 @@ def process_file_requests(file_name: str, driver_id: str, kafka_broker: List[str
         print("[FILE PROCESSOR] Waiting for service conclusion (ACEPTADO, RECHAZADO, or TICKET_ENVIADO)...")
         
         # 3. Wait for the service conclusion event (set by ACEPTADO/RECHAZADO/TICKET_ENVIADO in receive_responses)
-        SERVICE_CONCLUSION_EVENT.wait()  # This blocks until Central sends final conclusion/rejection
+        SERVICE_CONCLUSION_EVENT.wait()  # send_active_cp_listThis blocks until Central sends final conclusion/rejection
 
         # Handle ACEPTADO: If accepted, the thread needs to wait for the user to input stop (simulating the charge).
         # This is handled in main_menu_loop after the ACEPTADO response is processed.
@@ -210,8 +213,13 @@ def process_file_requests(file_name: str, driver_id: str, kafka_broker: List[str
     global FILE_PROCESSOR_THREAD
     FILE_PROCESSOR_THREAD = None
 
-def show_cp_available():
-    print("CP DISPONIBLES")
+def show_cp_available(driver_id: str, kafka_broker: List[str]):
+    print("[KAFKA] Solicitando lista de CPs activos a Central...")
+    producer = _create_producer(kafka_broker)
+    if producer:
+        message = f"CP_REQUEST:{driver_id}"
+        _send_message_sync(producer, KAFKA_REQUEST, message, DEFAULT_GET_TIMEOUT)
+    
 
 # --- 6. MAIN APPLICATION LOGIC ---
 def main_menu_loop(driver_id: str, kafka_broker: List[str]):
@@ -261,7 +269,6 @@ def main_menu_loop(driver_id: str, kafka_broker: List[str]):
 
         # 3. Display Menu and get user option
 
-        show_cp_available()
 
         print("\n================================================")
         print(f"DRIVER {driver_id}")
@@ -269,6 +276,7 @@ def main_menu_loop(driver_id: str, kafka_broker: List[str]):
         print("Selecciona una opcion:")
         print(" [1] Solicitar suministro de CP (Manual)")
         print(" [2] Leer fichero de servicios (Auto)")
+        print(" [3] Solicitar el listado de CPs Activos")
         
         opcion = input("> ")
 
@@ -287,7 +295,9 @@ def main_menu_loop(driver_id: str, kafka_broker: List[str]):
             # Start file processing and save the thread reference
             FILE_PROCESSOR_THREAD = threading.Thread(target=process_file_requests, args=(file_name, driver_id, kafka_broker), daemon=True)
             FILE_PROCESSOR_THREAD.start()
-        
+        elif opcion == '3': # <-- ACCIÓN PARA LA OPCIÓN 3
+            # Llama a tu función, que ahora envía la petición
+            show_cp_available(driver_id, kafka_broker)
         else:
             print("Opcion invalida.")
             
