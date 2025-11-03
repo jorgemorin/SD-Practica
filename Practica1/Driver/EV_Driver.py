@@ -210,7 +210,14 @@ def main_menu_loop(driver_id: str, kafka_broker: List[str]):
             if decision == 'ACEPTADO':
                 # Start charging session (blocks until user input)
                 handle_charging_session(driver_id, cp_id_response, kafka_broker)
-                # Do NOT set SERVICE_CONCLUSION_EVENT here, it must wait for TICKET_ENVIADO
+                
+                # [!!!!!] QUITAR EL handle_charging_session y poner una interfaz de "cargando",
+                # conectado mediante un nuevo topic directamente a Engine, quien va contando
+                # cuanto tiempo va recargando y como va aumentando el precio, tiene que salir
+                # por pantalla por aquí, solo será necesario un kafka consumer (desde aquí), y
+                # un kafka producer desde Engine.
+                # Por otra parte, en handle_charging_session, se pondrá en Engine, (con un thread)
+                # y se manejará la recarga (pausa manual y demás) desde allá.
                 
             elif decision == 'RECHAZADO':
                 print(f"--- RECARGA RECHAZADA en CP {cp_id_response}. Vuelva a intentar. ---")

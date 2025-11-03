@@ -221,14 +221,14 @@ def _check_and_authorize_cp(driver_id_received: str, cp_id_received: str):
             print("[DRIVER REQUEST] Charging Point is ACTIVE. Requesting authorization from CP...")
             
             # 2. Punto 4: Request CP authorization (Sockets)
-            if send_authorization_to_cp_via_socket(cp_id_received, driver_id_received):
-                decision = 'ACEPTADO'
-                # 3. If accepted by CP, CENTRAL changes state (Punto 4)
-                cp_registry[cp_id_received]['status'] = STATUS_SUMINISTRANDO
-                print(f"[DRIVER REQUEST] CP {cp_id_received} state changed to SUMINISTRANDO.")
-                write_data_cp() # Save state change
-            else:
-                print("[DRIVER REQUEST] CP rejected the authorization (Socket response).")
+            #if send_authorization_to_cp_via_socket(cp_id_received, driver_id_received):
+            decision = 'ACEPTADO'
+            # 3. If accepted by CP, CENTRAL changes state (Punto 4)
+            cp_registry[cp_id_received]['status'] = STATUS_SUMINISTRANDO
+            print(f"[DRIVER REQUEST] CP {cp_id_received} state changed to SUMINISTRANDO.")
+            write_data_cp() # Save state change
+            #else:
+            #    print("[DRIVER REQUEST] CP rejected the authorization (Socket response).")
             
         else:
             print(f"[DRIVER REQUEST] CP is unavailable ({cp_info['status']}). Rejecting.")
