@@ -34,7 +34,7 @@ STATUS_DESCONECTADO = 'DESCONECTADO' # GRIS
 
 # --- 2. DATA STRUCTURES (Simulated Database) ---
 cp_registry: dict[str, dict] = {}
-
+driver_registry: set[str] = set()
 # --- 3. UTILITY FUNCTIONS (Protocol and DB) ---
 
 def build_protocol_response(message_type: str, payload: str = "") -> bytes:
@@ -204,6 +204,101 @@ def send_authorization_to_cp_via_socket(cp_id: str, driver_id: str) -> bool:
         if 'client_socket' in locals():
             client_socket.close()
 
+#####################################################################################
+def read_data_driver():
+    """Reads Driver data from Drivers.txt into driver_registry."""
+    global driver_registry
+    try:
+        with open("Drivers.txt", "r") as file:
+            for line in file:
+                driver_id = line.strip()
+                if driver_id:
+                    driver_registry.add(driver_id)
+        print(f"[SERVER] Data loaded from Drivers.txt. {len(driver_registry)} Drivers found.")
+    except FileNotFoundError:
+        print("[WARNING] Drivers.txt not found. Starting with empty driver database.")
+    except Exception as e:
+        print(f"[ERROR] Error reading driver data: {e}")
+
+def write_data_driver():
+    """Writes current driver_registry data to Drivers.txt."""
+    global driver_registry
+    try:
+        with open("Drivers.txt", "w") as file:
+            for driver_id in driver_registry:
+                file.write(f"{driver_id}\n")
+        print("[SERVER] Driver data saved to Drivers.txt")
+    except Exception as e:
+        print(f"[ERROR] Failed to write to Drivers.txt: {e}")
+
+def authenticate_driver(driver_id: str):
+    """
+    Auto-registers a new driver upon their first request.
+    In a real system, this would be a complex auth process. Here, we auto-add them.
+    """
+    global driver_registry
+    if driver_id not in driver_registry:
+        print(f"[AUTH] New driver '{driver_id}' detected. Auto-registering...")
+        driver_registry.add(driver_id)
+        write_data_driver() # Guardamos el nuevo driver en Drivers.txt
+        print(f"[AUTH] Driver '{driver_id}' successfully registered.")
+        return True
+    else:
+        # El driver ya existía, la autenticación es válida
+        return True
+    
+
+def send_active_cp_list(driver_id: str):
+    """
+    Recopila todos los CPs con estado 'ACTIVO' y los envía al Driver
+    a través del KAFKA_RESPONSE_TOPIC.
+    """
+    global cp_registry
+    
+    print(f"[CP LIST] Solicitud de lista recibida del Driver: {driver_id}")
+    
+    active_cps_list = []
+    
+    for cp_id, info in cp_registry.items():
+        if info["status"] == STATUS_ACTIVO:
+            # Formato: CP_ID(Localizacion)@Precio
+            cp_info_str = f"{cp_id}({info['location']})@{info['price']}€"
+            active_cps_list.append(cp_info_str)
+
+    # Construir el mensaje final
+    if active_cps_list:
+        # Unimos todos los CPs con un separador ":"
+        payload = ":".join(active_cps_list)
+        message = f"CP_LIST:{payload}"
+    else:
+        message = "CP_LIST:No hay puntos de carga activos en este momento."
+
+    # Enviar la respuesta al Driver (usando un productor temporal, 
+    try:
+        producer = KafkaProducer(
+            bootstrap_servers=DEFAULT_KAFKA_BROKER,
+            api_version=(4, 1, 0),
+            request_timeout_ms=FAST_INIT_TIMEOUT,
+            value_serializer=lambda v: v.encode('utf-8')
+        )
+        
+        # Enviamos la lista al topic de respuestas
+        future = producer.send(KAFKA_RESPONSE_TOPIC, value=message)
+        future.get(timeout=10) # Espera a que se envíe
+        
+        print(f"[KAFKA CENTRAL] Enviada lista de CPs activos al Driver {driver_id}")
+
+    except Exception as e:
+        print(f"[KAFKA] ERROR: No se pudo enviar la lista de CPs: {e}")
+    finally:
+        if 'producer' in locals():
+            producer.close()
+
+
+
+######################################################################################
+
+
 def _check_and_authorize_cp(driver_id_received: str, cp_id_received: str):
     """
     Implements Central's logic to check CP availability (Punto 4).
@@ -214,36 +309,39 @@ def _check_and_authorize_cp(driver_id_received: str, cp_id_received: str):
             api_version=(4, 1, 0),
             request_timeout_ms=FAST_INIT_TIMEOUT
     )
-    
-    print(f"[DRIVER REQUEST] Checking Charging Point status for {cp_id_received}...")
-    if cp_id_received in cp_registry:
-        cp_info = cp_registry[cp_id_received]
-        
-        # 1. Check availability
-        if cp_info['status'] == STATUS_ACTIVO:
-            print("[DRIVER REQUEST] Charging Point is ACTIVE. Requesting authorization from CP...")
+    if not authenticate_driver(driver_id_received):
+        print(f"[DRIVER REQUEST] Authentication failed for {driver_id_received}.")
+    else:
+        print(f"[DRIVER REQUEST] Checking Charging Point status for {cp_id_received}...")
+        if cp_id_received in cp_registry:
+            cp_info = cp_registry[cp_id_received]
             
-            # 2. Punto 4: Request CP authorization (Sockets)
-            #if send_authorization_to_cp_via_socket(cp_id_received, driver_id_received):
-            decision = 'ACEPTADO'
-            # 3. If accepted by CP, CENTRAL changes state (Punto 4)
-            cp_registry[cp_id_received]['status'] = STATUS_SUMINISTRANDO
-            print(f"[DRIVER REQUEST] CP {cp_id_received} state changed to SUMINISTRANDO.")
-            write_data_cp() # Save state change
-            message = f"START:{cp_id_received}:{driver_id_received}"
-            future = producer.send(KAFKA_ENGINE_TOPIC, value=message.encode('utf-8'))
-            future.get(timeout=100)
-            print(f"[KAFKA CENTRAL] Sent message to driver: {message}")
+            # 1. Check availability
+            if cp_info['status'] == STATUS_ACTIVO:
+                print("[DRIVER REQUEST] Charging Point is ACTIVE. Requesting authorization from CP...")
+                
+                # 2. Punto 4: Request CP authorization (Sockets)
+                #if send_authorization_to_cp_via_socket(cp_id_received, driver_id_received):
+                decision = 'ACEPTADO'
+                # 3. If accepted by CP, CENTRAL changes state (Punto 4)
+                cp_registry[cp_id_received]['status'] = STATUS_SUMINISTRANDO
+                print(f"[DRIVER REQUEST] CP {cp_id_received} state changed to SUMINISTRANDO.")
+                write_data_cp() # Save state change
+                message = f"START:{cp_id_received}:{driver_id_received}"
+                future = producer.send(KAFKA_ENGINE_TOPIC, value=message.encode('utf-8'))
+                future.get(timeout=100)
+                print(f"[KAFKA CENTRAL] Sent message to driver: {message}")
 
-            #else:
-            #    print("[DRIVER REQUEST] CP rejected the authorization (Socket response).")
-            
+                #else:
+                #    print("[DRIVER REQUEST] CP rejected the authorization (Socket response).")
+                
+            else:
+                decision = 'RECHAZADO'
+                print(f"[DRIVER REQUEST] CP is unavailable ({cp_info['status']}). Rejecting.")
+                
         else:
             decision = 'RECHAZADO'
-            print(f"[DRIVER REQUEST] CP is unavailable ({cp_info['status']}). Rejecting.")
-            
-    else:
-        print("[DRIVER REQUEST] Charging Point not found in registry. Rejecting.")
+            print("[DRIVER REQUEST] Charging Point not found in registry. Rejecting.")
 
     # 4. Punto 4, 176: CENTRAL notifies the Driver (Kafka)
     send_request_decision_to_driver(driver_id_received, cp_id_received, decision)
@@ -287,6 +385,9 @@ def read_consumer():
                         send_request_decision_to_driver(driver_id_stop, cp_id_stop, "TICKET_ENVIADO")
                     else:
                         print(f"[KAFKA] Received STOP for CP {cp_id_stop} not in SUMINISTRANDO.")
+                elif message_str.startswith("CP_REQUEST:") and len(parts)>=2:
+                    driver_id_received = parts[1]
+                    send_active_cp_list(driver_id_received)
             
             elif message.topic == KAFKA_TELEMETRY_TOPIC:
                 parts = message_str.split(':')
@@ -301,8 +402,10 @@ def read_consumer():
                         api_version=(4, 1, 0),
                         request_timeout_ms=FAST_INIT_TIMEOUT
                     )
-
-                    message = f"TICKET:{cp_id}:{driver_id}:{kwh}:{cost}"
+                    if len(parts)==6:
+                        message = f"TICKET:{cp_id}:{driver_id}:{kwh}:{cost}:AVERIA"
+                    else:
+                        message = f"TICKET:{cp_id}:{driver_id}:{kwh}:{cost}"
                     print(f"[KAFKA] Enviando: {message}")
                     future = producer.send(KAFKA_RESPONSE_TOPIC, value=message.encode('utf-8'))
                     future.get(timeout=100)
@@ -445,6 +548,7 @@ if __name__ == "__main__":
     print("[SERVER] Starting EV_Central...")
     reset_cp_state()
     read_data_cp()
+    read_data_driver()
     
     try:
         start() # Iniciar el servidor de Sockets para CPs
