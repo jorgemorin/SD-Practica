@@ -13,7 +13,7 @@ KAFKA_RESPONSE_TOPIC = 'DriverResponse'
 KAFKA_TELEMETRY_TOPIC = 'CPTelemetry' # NEW: Topic for CP monitoring (Punto 8)
 KAFKA_ENGINE_TOPIC = 'commands_to_cp'
 KAFKA_TICKET_TOPIC = 'TicketResponse'
-DEFAULT_KAFKA_BROKER = ['localhost:9092']
+KAFKA_BROKER_ADDR = None
 
 # Kafka Timeout Optimization (ms)
 FAST_INIT_TIMEOUT = 10001
@@ -21,7 +21,6 @@ CONSUMER_SESSION_TIMEOUT = 10000
 CONSUMER_HEARTBEAT = 3000
 
 # Server/Socket Config
-PORT_SOCKET = 5000
 HOST = '0.0.0.0' # Listen on all interfaces
 FORMAT = 'utf-8'
 
@@ -139,9 +138,10 @@ def write_data_cp():
 
 def send_request_decision_to_driver(driver_id: str, cp_id: str, decision: str):
     """Sends the final decision (ACEPTADO/RECHAZADO) back to the Driver via Kafka (Punto 4, 176)."""
+    global KAFKA_BROKER_ADDR
     try:
         producer = KafkaProducer(
-            bootstrap_servers=DEFAULT_KAFKA_BROKER,
+            bootstrap_servers=KAFKA_BROKER_ADDR,
             api_version=(4, 1, 0),
             request_timeout_ms=FAST_INIT_TIMEOUT
         )
@@ -253,7 +253,7 @@ def send_active_cp_list(driver_id: str):
     Recopila todos los CPs con estado 'ACTIVO' y los envía al Driver
     a través del KAFKA_RESPONSE_TOPIC.
     """
-    global cp_registry
+    global cp_registry,KAFKA_BROKER_ADDR
     
     print(f"[CP LIST] Solicitud de lista recibida del Driver: {driver_id}")
     
@@ -276,7 +276,7 @@ def send_active_cp_list(driver_id: str):
     # Enviar la respuesta al Driver (usando un productor temporal, 
     try:
         producer = KafkaProducer(
-            bootstrap_servers=DEFAULT_KAFKA_BROKER,
+            bootstrap_servers=KAFKA_BROKER_ADDR,
             api_version=(4, 1, 0),
             request_timeout_ms=FAST_INIT_TIMEOUT,
             value_serializer=lambda v: v.encode('utf-8')
@@ -304,8 +304,9 @@ def _check_and_authorize_cp(driver_id_received: str, cp_id_received: str):
     Implements Central's logic to check CP availability (Punto 4).
     If ACTIVO, requests authorization from CP (via Sockets).
     """
+    global KAFKA_BROKER_ADDR
     producer = KafkaProducer(
-            bootstrap_servers=DEFAULT_KAFKA_BROKER,
+            bootstrap_servers=KAFKA_BROKER_ADDR,
             api_version=(4, 1, 0),
             request_timeout_ms=FAST_INIT_TIMEOUT
     )
@@ -348,11 +349,12 @@ def _check_and_authorize_cp(driver_id_received: str, cp_id_received: str):
 
 def read_consumer():
     """Consumes requests from DriverRequest and Telemetry from CPTelemetry (Punto 8)."""
+    global KAFKA_BROKER_ADDR
     topics = [KAFKA_REQUEST_TOPIC, KAFKA_TELEMETRY_TOPIC]
     try:
         consumer = KafkaConsumer(
             *topics,
-            bootstrap_servers=DEFAULT_KAFKA_BROKER, 
+            bootstrap_servers=KAFKA_BROKER_ADDR, 
             auto_offset_reset='latest',
             enable_auto_commit=True,
             group_id='ev-central-group-1022-v3',
@@ -398,7 +400,7 @@ def read_consumer():
                     cost = parts[4]
 
                     producer = KafkaProducer(
-                        bootstrap_servers=DEFAULT_KAFKA_BROKER,
+                        bootstrap_servers=KAFKA_BROKER_ADDR,
                         api_version=(4, 1, 0),
                         request_timeout_ms=FAST_INIT_TIMEOUT
                     )
@@ -517,8 +519,8 @@ def handle_client(conn, addr):
         conn.close()
         print(f"[SERVER] {addr} connection closed.")
 
-def start():
-    print(f"[SERVER] Server listening on {HOST}:{PORT_SOCKET}")
+def start(port):
+    print(f"[SERVER] Server listening on {HOST}:{port}")
     server.listen()
     num_conections = threading.active_count() - 1
     print("[SERVER] Number of active connections: ", num_conections)
@@ -534,7 +536,23 @@ def start():
 if __name__ == "__main__":
     # Configurar el socket para escuchar las conexiones de los CP Monitors (Registro/Estado)
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    ADDR = (HOST, PORT_SOCKET)
+    if len(sys.argv) != 4:
+        print("Uso: python EV_Central.py <IP_KAFKA> <PUERTO_KAFKA> <PUERTO_SOCKET_ESCUCHA>")
+        sys.exit(1)
+    
+    KAFKA_BROKER_ADDR = [f'{sys.argv[2]}:{sys.argv[3]}']
+
+    try:
+        # Guardamos el puerto de escucha del socket
+        port_socket = int(sys.argv[1])
+    except ValueError:
+        print(f"ERROR: El puerto de escucha '{sys.argv[1]}' no es un número válido.")
+        sys.exit(1)
+
+    # --- 2. CONFIGURAR EL SOCKET ---
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    ADDR = (HOST, port_socket)
+
     try:
         server.bind(ADDR)
     except Exception as e:
@@ -551,7 +569,7 @@ if __name__ == "__main__":
     read_data_driver()
     
     try:
-        start() # Iniciar el servidor de Sockets para CPs
+        start(port_socket) # Iniciar el servidor de Sockets para CPs
     except KeyboardInterrupt:
         print("\n[SERVER] Shutting down server...")
         write_data_cp()
