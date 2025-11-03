@@ -290,8 +290,10 @@ def read_consumer():
                         send_request_decision_to_driver(driver_id_stop, cp_id_stop, "TICKET_ENVIADO")
                     else:
                         print(f"[KAFKA] Received STOP for CP {cp_id_stop} not in SUMINISTRANDO.")
-
-                elif message_str.startswith("TICKET:") and len(parts) >= 5:
+            
+            elif message.topic == KAFKA_TELEMETRY_TOPIC:
+                parts = message_str.split(':')
+                if message_str.startswith("TICKET:") and len(parts) >= 5:
                     cp_id = parts[1]
                     driver_id = parts[2]
                     kwh = parts[3]
@@ -306,19 +308,13 @@ def read_consumer():
                     message = f"TICKET:{cp_id}:{driver_id}:{kwh}:{cost}"
                     future = producer.send(KAFKA_RESPONSE_TOPIC, value=message.encode('utf-8'))
                     future.get(timeout=100)
-
-                    
-
-            elif message.topic == KAFKA_TELEMETRY_TOPIC:
-                # Punto 8: Recibir Telemetria. Format: CP_ID:CONSUMO:IMPORTE
-                tele_parts = message_str.split(':')
-                if len(tele_parts) >= 3 and tele_parts[0] in cp_registry:
-                    cp_id, consumo, importe = tele_parts[0], tele_parts[1], tele_parts[2]
-                    # NOTE: Logic to update the central monitoring panel (not implemented in this console version)
-                    print(f"[TELEMETRY] CP {cp_id}: Consumo={consumo}Kw, Importe={importe}$")
-                    # Reenviar Telemetria al conductor (Punto 8). Format: TELEMETRY:CP_ID:CONSUMO:IMPORTE
-                    # (Necesitariamos saber el Driver ID, que no esta en la telemetria. Simplificacion: asume que el CP sabe a quien enviar)
-                    # ALTERNATIVA: El Driver consume el mismo topic KAFKA_TELEMETRY_TOPIC y filtra por CP_ID
+                else:
+                    tele_parts = message_str.split(':')
+                    if len(tele_parts) >= 4 and tele_parts[1] in cp_registry:
+                        cp_id, kwh, cost = tele_parts[1], tele_parts[2], tele_parts[3]
+                    print(f"[TELEMETRY] CP {cp_id}: Consumo={kwh}Kw, Importe={cost}")
+            else:
+                print("[ERROR] Kafka")
 
     except Exception as e:
         print(f"[KAFKA] ERROR: Consumer thread failed: {e}")

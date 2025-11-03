@@ -132,7 +132,7 @@ def receive_responses(kafka_broker: List[str], driver_id: str):
                     print(f"\n<<< RECEIVED NOTIFICATION >>> Decision for CP {cp_id_response}: {decision}")
 
                     # Handle final conclusion for file processing thread
-                    if decision == 'RECHAZADO' or decision == 'TICKET_ENVIADO': # TICKET_ENVIADO is the final conclusion (Punto 9)
+                    if decision == 'RECHAZADO' or decision == 'TICKET': # TICKET_ENVIADO is the final conclusion (Punto 9)
                         SERVICE_CONCLUSION_EVENT.set()
                         global CURRENT_CHARGING_CP
                         CURRENT_CHARGING_CP = None
@@ -212,7 +212,8 @@ def main_menu_loop(driver_id: str, kafka_broker: List[str]):
             
             if decision == 'ACEPTADO':
                 # Start charging session (blocks until user input)
-                handle_charging_session(driver_id, cp_id_response, kafka_broker)
+                # handle_charging_session(driver_id, cp_id_response, kafka_broker)
+                print("[INFO] Cargando...")
                 
                 # [!!!!!] QUITAR EL handle_charging_session y poner una interfaz de "cargando",
                 # conectado mediante un nuevo topic directamente a Engine, quien va contando
@@ -229,7 +230,7 @@ def main_menu_loop(driver_id: str, kafka_broker: List[str]):
                 SERVICE_CONCLUSION_EVENT.set()
                 time.sleep(1)
             
-            elif decision == 'TICKET_ENVIADO':
+            elif decision == 'TICKET':
                 print(f"--- RECARGA FINALIZADA en CP {cp_id_response}. TICKET RECIBIDO. ---")
                 CURRENT_CHARGING_CP = None
                 # If in auto mode, signal conclusion for 4-second pause
