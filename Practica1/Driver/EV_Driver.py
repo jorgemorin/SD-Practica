@@ -1,13 +1,36 @@
 # -*- coding: utf-8 -*-
 # EV_Driver: Driver application logic for the EVCharging system.
 # Implements Request/Reply via Kafka and file-based automatic service requests (Punto 3).
+#
+# --- MODIFICACIÓN VISUAL ---
+# Se han añadido colores ANSI y limpieza de pantalla para una interfaz
+# más agradable, sin alterar la lógica de negocio.
+# ---------------------------
 
 from kafka import KafkaProducer, KafkaConsumer
 from kafka.errors import NoBrokersAvailable
 import time
 import sys
 import threading
+import os  # <--- NUEVO: Para limpiar la pantalla
 from typing import List, Dict, Any, Optional
+
+# --- 0. VISUALS (NUEVO) ---
+def _clear_screen():
+    """Limpia la pantalla de la terminal."""
+    os.system('cls' if os.name == 'nt' else 'clear')
+
+class Colors:
+    """Clase para colores de terminal ANSI."""
+    RESET = '\033[0m'
+    BOLD = '\033[1m'
+    RED = '\033[91m'
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    BLUE = '\033[94m'
+    MAGENTA = '\033[95m'
+    CYAN = '\033[96m'
+    WHITE = '\033[97m'
 
 # --- 1. CONFIGURATION AND CONSTANTS ---
 KAFKA_REQUEST = 'DriverRequest'
@@ -28,6 +51,7 @@ RESPONSE_STATE: Dict[str, Optional[Any]] = {"decision": None, "cp_id": None}
 RESPONSE_LOCK = threading.Lock()
 SERVICE_CONCLUSION_EVENT = threading.Event()
 CURRENT_CHARGING_CP: Optional[str] = None # NEW: Track the CP the driver is connected to
+LAST_TICKET_INFO: Optional[str] = None # NUEVO: Para mostrar el último ticket en la UI
 
 # NUEVO: Estado para el hilo de procesamiento de archivos
 FILE_PROCESSOR_THREAD: Optional[threading.Thread] = None
@@ -44,7 +68,7 @@ def _create_producer(kafka_broker: List[str]) -> Optional[KafkaProducer]:
         )
         return producer
     except Exception as e:
-        print(f"[KAFKA PRODUCER] ERROR: Failed to create producer: {e}")
+        print(f"{Colors.RED}[KAFKA PRODUCER] ERROR: Failed to create producer: {e}{Colors.RESET}")
         return None
 
 def _send_message_sync(producer: KafkaProducer, topic: str, message: str, timeout: int) -> bool:
@@ -52,10 +76,11 @@ def _send_message_sync(producer: KafkaProducer, topic: str, message: str, timeou
     try:
         future = producer.send(topic, value=message.encode('utf-8'))
         future.get(timeout=timeout)
-        print(f"[KAFKA] Sent: {message}")
+        # No imprimir aquí, la UI lo gestiona
+        # print(f"[KAFKA] Sent: {message}")
         return True
     except Exception as e:
-        print(f"[KAFKA PRODUCER] ERROR: An unexpected error occurred during send: {e}")
+        print(f"{Colors.RED}[KAFKA PRODUCER] ERROR: An unexpected error occurred during send: {e}{Colors.RESET}")
         return False
     finally:
         producer.close()
@@ -80,7 +105,7 @@ def send_stop_signal(driver_id: str, cp_id: str, kafka_broker: List[str]):
 
 def handle_charging_session(driver_id: str, cp_id: str, kafka_broker: List[str]):
     """Simulates the charging session and waits for user input to stop (Punto 7, 9)."""
-    print(f"\n<<< INICIANDO RECARGA EN CP {cp_id} (Simulacion: Enchufado) >>>")
+    print(f"\n{Colors.GREEN}<<< INICIANDO RECARGA EN CP {cp_id} (Simulacion: Enchufado) >>>{Colors.RESET}")
     print("El vehiculo esta cargando... Presione [ENTER] para desenchufar y parar.")
     
     # Bloqueo hasta que el usuario presiona Enter (simulando el desenchufado - Punto 187)
@@ -88,7 +113,7 @@ def handle_charging_session(driver_id: str, cp_id: str, kafka_broker: List[str])
     
     # Send the stop signal to Central (Punto 9)
     send_stop_signal(driver_id, cp_id, kafka_broker)
-    print("Senyal de parada enviada. Esperando TICKET final de Central...")
+    print(f"{Colors.YELLOW}Senyal de parada enviada. Esperando TICKET final de Central...{Colors.RESET}")
     
     # NOTE: The driver must wait for the TICKET_ENVIADO message from Central to confirm conclusion
 
@@ -96,10 +121,8 @@ def receive_responses(kafka_broker: List[str], driver_id: str):
     """Consumer thread: listens for responses (KAFKA_RESPONSE) and Telemetry (KAFKA_TELEMETRY)."""
     consumer = None
     consumer_group = f'ev_driver_group_{driver_id}'
+    global LAST_TICKET_INFO # NUEVO: Acceso a la variable global
     
-    # Driver only receives messages of the CP providing the service (Punto 194).
-    # Since Kafka is a broadcast system, the consumer must filter messages.
-
     try:
         consumer = KafkaConsumer(
             KAFKA_RESPONSE, 
@@ -113,7 +136,7 @@ def receive_responses(kafka_broker: List[str], driver_id: str):
             session_timeout_ms=CONSUMER_SESSION_TIMEOUT,
             heartbeat_interval_ms=CONSUMER_HEARTBEAT
         )
-        print("[KAFKA CONSUMER] Successfully connected to broker and listening.")
+        print(f"{Colors.GREEN}[KAFKA CONSUMER] Successfully connected to broker and listening.{Colors.RESET}")
         
         for message in consumer:
             response_str = message.value.decode('utf-8')
@@ -128,8 +151,8 @@ def receive_responses(kafka_broker: List[str], driver_id: str):
                     with RESPONSE_LOCK:
                         RESPONSE_STATE["decision"] = decision
                         RESPONSE_STATE["cp_id"] = cp_id_response
-                        
-                    print(f"\n<<< RECEIVED NOTIFICATION >>> Decision for CP {cp_id_response}: {decision}")
+                    
+                    # (La UI principal se encargará de mostrar la notificación)
 
                     # Handle final conclusion for file processing thread
                     if decision == 'RECHAZADO' or decision == 'TICKET': # TICKET_ENVIADO is the final conclusion (Punto 9)
@@ -141,10 +164,16 @@ def receive_responses(kafka_broker: List[str], driver_id: str):
                     consumo = parts[3]  
                     importe = parts[4]
                     if len(parts)==6 and parts[5]=="AVERIA":
-                          print("[ERROR] El punto de carga ha sufrido una averia")
-                          print(f"[TICKET_AVERIA] Consumo: {consumo}Kwh, Importe: {importe}$")
+                          print(f"\n{Colors.RED}{Colors.BOLD}<<< TICKET POR AVERIA (CP {cp_id_ticket}) >>>{Colors.RESET}")
+                          print(f"{Colors.RED}  [ERROR] El punto de carga ha sufrido una averia")
+                          print(f"  Consumo: {consumo} Kwh | Importe: {importe} ${Colors.RESET}")
+                          # --- NUEVO: Guardar estado del ticket ---
+                          LAST_TICKET_INFO = f"{Colors.RED}AVERIA (CP {cp_id_ticket}): {consumo} Kwh | {importe} ${Colors.RESET}"
                     else:
-                        print(f"[TICKET] Consumo: {consumo}Kwh, Importe: {importe}$")  
+                        print(f"\n{Colors.GREEN}{Colors.BOLD}<<< TICKET RECIBIDO (CP {cp_id_ticket}) >>>{Colors.RESET}")
+                        print(f"{Colors.GREEN}  Consumo: {consumo} Kwh | Importe: {importe} ${Colors.RESET}")
+                        # --- NUEVO: Guardar estado del ticket ---
+                        LAST_TICKET_INFO = f"{Colors.GREEN}CP {cp_id_ticket}: {consumo} Kwh | {importe} ${Colors.RESET}"
                     
                     # IMPORTANTE: Actualizar el estado para que main_menu_loop lo procese  
                     with RESPONSE_LOCK:  
@@ -153,9 +182,31 @@ def receive_responses(kafka_broker: List[str], driver_id: str):
                     
                     SERVICE_CONCLUSION_EVENT.set()  
                     CURRENT_CHARGING_CP = None
+                
                 elif parts[0] == "CP_LIST":
-                    print("\n<<< PUNTOS DE CARGA ACTIVOS RECIBIDOS >>>")
-                    print(f"  {response_str[8:]}")
+                    # --- NUEVO: Formato mejorado para CP_LIST ---
+                    print(f"\n{Colors.CYAN}{Colors.BOLD}<<< PUNTOS DE CARGA ACTIVOS >>>{Colors.RESET}")
+                    print(f"{Colors.BOLD}  {'CP ID':<8} | {'UBICACION':<25} | {'PRECIO':<10}{Colors.RESET}")
+                    print(f"  {'-'*8} | {'-'*25} | {'-'*10}")
+                    
+                    cp_data_str = response_str[8:]
+                    if not cp_data_str:
+                         print(f"  {Colors.YELLOW}No hay CPs activos en este momento.{Colors.RESET}")
+                    
+                    try:
+                        cp_items = cp_data_str.split(':')
+                        for item in cp_items:
+                            if '(' in item and ')@' in item:
+                                part1 = item.split('(')
+                                cp_id = part1[0]
+                                part2 = part1[1].split(')@')
+                                ubicacion = part2[0]
+                                precio = part2[1]
+                                print(f"  {Colors.GREEN}{cp_id:<8}{Colors.RESET} | {ubicacion:<25} | {Colors.YELLOW}{precio:<10}{Colors.RESET}")
+                    except Exception as e:
+                        print(f"  {Colors.RED}Error al parsear la lista de CPs. Datos brutos:{Colors.RESET} {cp_data_str}")
+                    print(f"\n{Colors.YELLOW}Presione [Enter] para volver al menu...{Colors.RESET}")
+
 
             elif message.topic == KAFKA_TELEMETRY:
                 # Format: CP_ID:CONSUMO:IMPORTE
@@ -163,10 +214,15 @@ def receive_responses(kafka_broker: List[str], driver_id: str):
                 if len(tele_parts) >= 3 and tele_parts[0] == CURRENT_CHARGING_CP: # Filter by the current charging CP (Punto 194)
                     cp_id, consumo, importe = tele_parts[0], tele_parts[1], tele_parts[2]
                     # Punto 8: Mostrar estados del CP
-                    print(f"\n[TELEMETRY CP {cp_id}] Consumo en tiempo real: {consumo}Kw | Importe acumulado: {importe}$")
+                    # (Se muestra en el bucle principal)
+                    # print(f"\n[TELEMETRY CP {cp_id}] Consumo en tiempo real: {consumo}Kw | Importe acumulado: {importe}$")
+                    # En lugar de imprimir, actualizamos la UI en el bucle principal si es necesario.
+                    # Por ahora, un print está bien si la UI principal está bloqueada.
+                    print(f"\r{Colors.CYAN}[TELEMETRY CP {cp_id}] Consumo: {consumo} Kw | Importe: {importe} ${Colors.RESET}   ", end="")
+
 
     except Exception as e:
-        print(f"[KAFKA CONSUMER] ERROR: Consumer thread failed: {e}")
+        print(f"{Colors.RED}[KAFKA CONSUMER] ERROR: Consumer thread failed: {e}{Colors.RESET}")
     finally:
         if consumer is not None:
             consumer.close()
@@ -179,13 +235,13 @@ def process_file_requests(file_name: str, driver_id: str, kafka_broker: List[str
         with open(file_name, 'r') as file:
             cp_ids = [line.strip() for line in file if line.strip()]
     except FileNotFoundError:
-        print(f"[FILE PROCESSOR] ERROR: File '{file_name}' not found.")
+        print(f"{Colors.RED}[FILE PROCESSOR] ERROR: File '{file_name}' not found.{Colors.RESET}")
         return
 
-    print(f"[FILE PROCESSOR] Starting sequence of {len(cp_ids)} requests.")
+    print(f"{Colors.MAGENTA}[FILE PROCESSOR] Starting sequence of {len(cp_ids)} requests.{Colors.RESET}")
     
     for i, cp_id in enumerate(cp_ids):
-        print(f"\n[FILE PROCESSOR] --- Starting request {i+1}/{len(cp_ids)} for CP ID: {cp_id} ---")
+        print(f"\n{Colors.MAGENTA}[FILE PROCESSOR] --- Starting request {i+1}/{len(cp_ids)} for CP ID: {cp_id} ---{Colors.RESET}")
         
         # 1. Reset the event flag
         SERVICE_CONCLUSION_EVENT.clear()
@@ -193,28 +249,23 @@ def process_file_requests(file_name: str, driver_id: str, kafka_broker: List[str
         # 2. Send the request (REQUEST:DRIVER_ID:CP_ID)
         request_service(driver_id, cp_id, kafka_broker)
         
-        print("[FILE PROCESSOR] Waiting for service conclusion (ACEPTADO, RECHAZADO, or TICKET_ENVIADO)...")
+        print(f"{Colors.MAGENTA}[FILE PROCESSOR] Waiting for service conclusion (ACEPTADO, RECHAZADO, or TICKET)...{Colors.RESET}")
         
-        # 3. Wait for the service conclusion event (set by ACEPTADO/RECHAZADO/TICKET_ENVIADO in receive_responses)
-        SERVICE_CONCLUSION_EVENT.wait()  # send_active_cp_listThis blocks until Central sends final conclusion/rejection
+        # 3. Wait for the service conclusion event
+        SERVICE_CONCLUSION_EVENT.wait()  
 
-        # Handle ACEPTADO: If accepted, the thread needs to wait for the user to input stop (simulating the charge).
-        # This is handled in main_menu_loop after the ACEPTADO response is processed.
-        # The main_menu_loop will call handle_charging_session which will block until user input and then send STOP.
-        # The thread will only proceed when TICKET_ENVIADO is received by the consumer, triggering SERVICE_CONCLUSION_EVENT.set()
-        
-        print(f"[FILE PROCESSOR] Service concluded. Pausing for {PAUSE_AFTER_SERVICE} seconds (Punto 195)...")
+        print(f"{Colors.MAGENTA}[FILE PROCESSOR] Service concluded. Pausing for {PAUSE_AFTER_SERVICE} seconds (Punto 195)...{Colors.RESET}")
         
         # 4. Wait 4 seconds before next service (Punto 195)
         time.sleep(PAUSE_AFTER_SERVICE)
 
-    print("[FILE PROCESSOR] Sequence finished. Returning to manual mode.")
+    print(f"{Colors.MAGENTA}[FILE PROCESSOR] Sequence finished. Returning to manual mode.{Colors.RESET}")
     # Clean up global thread reference
     global FILE_PROCESSOR_THREAD
     FILE_PROCESSOR_THREAD = None
 
 def show_cp_available(driver_id: str, kafka_broker: List[str]):
-    print("[KAFKA] Solicitando lista de CPs activos a Central...")
+    print(f"{Colors.YELLOW}[KAFKA] Solicitando lista de CPs activos a Central...{Colors.RESET}")
     producer = _create_producer(kafka_broker)
     if producer:
         message = f"CP_REQUEST:{driver_id}"
@@ -226,87 +277,116 @@ def main_menu_loop(driver_id: str, kafka_broker: List[str]):
     """Main application loop to display the menu and handle user input."""
     global FILE_PROCESSOR_THREAD
     global CURRENT_CHARGING_CP # Usar la variable global
+    global LAST_TICKET_INFO # NUEVO: Acceso para mostrar el ticket
+    
+    last_notification = "" # NUEVO: Para mostrar mensajes temporales
 
     while True:
         
-        # 1. Check for Kafka Response Status and handle charging session
+        # 1. Check for Kafka Response Status
         with RESPONSE_LOCK:
             decision = RESPONSE_STATE["decision"]
             cp_id_response = RESPONSE_STATE["cp_id"]
             RESPONSE_STATE["decision"] = None # Reset decision status
             
             if decision == 'ACEPTADO':
-                # Start charging session (blocks until user input)
                 # handle_charging_session(driver_id, cp_id_response, kafka_broker)
-                print("[INFO] Cargando...")
-                
-                # [!!!!!] QUITAR EL handle_charging_session y poner una interfaz de "cargando",
-                # conectado mediante un nuevo topic directamente a Engine, quien va contando
-                # cuanto tiempo va recargando y como va aumentando el precio, tiene que salir
-                # por pantalla por aquí, solo será necesario un kafka consumer (desde aquí), y
-                # un kafka producer desde Engine.
-                # Por otra parte, en handle_charging_session, se pondrá en Engine, (con un thread)
-                # y se manejará la recarga (pausa manual y demás) desde allá.
+                last_notification = f"{Colors.GREEN}RECARGA ACEPTADA en CP {cp_id_response}. Conectado.{Colors.RESET}"
                 
             elif decision == 'RECHAZADO':
-                print(f"--- RECARGA RECHAZADA en CP {cp_id_response}. Vuelva a intentar. ---")
+                last_notification = f"{Colors.RED}--- RECARGA RECHAZADA en CP {cp_id_response}. Vuelva a intentar. ---{Colors.RESET}"
                 CURRENT_CHARGING_CP = None
-                # If in auto mode, signal conclusion for 4-second pause
                 SERVICE_CONCLUSION_EVENT.set()
                 time.sleep(1)
             
             elif decision == 'TICKET':
-                print(f"--- RECARGA FINALIZADA en CP {cp_id_response}. TICKET RECIBIDO. ---")
+                last_notification = f"{Colors.GREEN}--- RECARGA FINALIZADA en CP {cp_id_response}. TICKET RECIBIDO. ---{Colors.RESET}"
                 CURRENT_CHARGING_CP = None
-                # If in auto mode, signal conclusion for 4-second pause
                 SERVICE_CONCLUSION_EVENT.set()
                 time.sleep(1)
 
         # 2. Pause the menu if the file processing thread is active or charging session is active (Punto 177)
-        if (FILE_PROCESSOR_THREAD and FILE_PROCESSOR_THREAD.is_alive()) or CURRENT_CHARGING_CP is not None:
+        is_busy = (FILE_PROCESSOR_THREAD and FILE_PROCESSOR_THREAD.is_alive()) or CURRENT_CHARGING_CP is not None
+        
+        # --- NUEVO: Redibujar la UI ---
+        _clear_screen()
+        print(f"{Colors.CYAN}{Colors.BOLD}================================================{Colors.RESET}")
+        print(f"{Colors.CYAN}{Colors.BOLD}  EV DRIVER TERMINAL (Driver ID: {driver_id}) {Colors.RESET}")
+        print(f"{Colors.CYAN}{Colors.BOLD}================================================{Colors.RESET}")
+
+        # --- NUEVO: Panel de Estado ---
+        print(f"{Colors.BOLD} ESTADO ACTUAL: {Colors.RESET}", end="")
+        if is_busy:
+            if FILE_PROCESSOR_THREAD and FILE_PROCESSOR_THREAD.is_alive():
+                print(f"{Colors.MAGENTA}MODO AUTOMÁTICO (Archivo) ACTIVO...{Colors.RESET}")
+            elif CURRENT_CHARGING_CP is not None:
+                print(f"{Colors.GREEN}CARGANDO en CP {CURRENT_CHARGING_CP}... (Escuchando telemetría){Colors.RESET}")
+                # [!!!!!] LÍNEA ELIMINADA (Solicitud del usuario)
+        else:
+            print(f"{Colors.YELLOW}ESPERANDO INSTRUCCIONES...{Colors.RESET}")
+        
+        print("------------------------------------------------")
+
+        # --- NUEVO: Panel de Último Ticket ---
+        print(f"{Colors.BOLD} ÚLTIMO TICKET: {Colors.RESET}", end="")
+        if LAST_TICKET_INFO:
+            print(LAST_TICKET_INFO)
+        else:
+            print(f"{Colors.YELLOW}N/A{Colors.RESET}")
+
+        print("------------------------------------------------")
+
+
+        # Mostrar la última notificación si existe
+        if last_notification:
+            print(f"{last_notification}\n")
+            last_notification = "" # Limpiar después de mostrar
+
+        # 3. Display Menu (Solo si no está ocupado)
+        if is_busy:
+            print(f"{Colors.YELLOW}Procesando solicitud... por favor espere.{Colors.RESET}")
             time.sleep(1) 
             continue # Go back to the top of the loop to check for Kafka messages/status
-
-        # 3. Display Menu and get user option
-
-
-        print("\n================================================")
-        print(f"DRIVER {driver_id}")
-        print("================================================")
-        print("Selecciona una opcion:")
-        print(" [1] Solicitar suministro de CP (Manual)")
-        print(" [2] Leer fichero de servicios (Auto)")
-        print(" [3] Solicitar el listado de CPs Activos")
         
-        opcion = input("> ")
+        print(f"{Colors.BOLD}Selecciona una opcion:{Colors.RESET}")
+        print(f" {Colors.YELLOW}[1]{Colors.RESET} Solicitar suministro de CP (Manual)")
+        print(f" {Colors.YELLOW}[2]{Colors.RESET} Leer fichero de servicios (Auto)")
+        print(f" {Colors.YELLOW}[3]{Colors.RESET} Solicitar el listado de CPs Activos")
+        
+        opcion = input(f"\n{Colors.BOLD}> {Colors.RESET}")
 
         if opcion == '1':
             try:
-                cp_id_input = str(input("Seleccione un Charging Point para solicitar suministro: "))
+                cp_id_input = str(input(f" {Colors.CYAN}Seleccione un Charging Point para solicitar suministro: {Colors.RESET}"))
             except Exception:
-                print("ID de Charging Point invalido.")
+                last_notification = f"{Colors.RED}ID de Charging Point invalido.{Colors.RESET}"
                 continue
 
-            # Send the service request
+            last_notification = f"{Colors.YELLOW}Enviando solicitud para CP {cp_id_input}...{Colors.RESET}"
             request_service(driver_id, cp_id_input, kafka_broker)
         
         elif opcion == '2':
-            file_name = input("Ingrese el nombre del archivo de servicios (ej: servicios.txt): ")
+            file_name = input(f" {Colors.CYAN}Ingrese el nombre del archivo de servicios (ej: servicios.txt): {Colors.RESET}")
             # Start file processing and save the thread reference
             FILE_PROCESSOR_THREAD = threading.Thread(target=process_file_requests, args=(file_name, driver_id, kafka_broker), daemon=True)
             FILE_PROCESSOR_THREAD.start()
+            last_notification = f"{Colors.MAGENTA}Iniciando modo automático desde '{file_name}'...{Colors.RESET}"
+        
         elif opcion == '3': # <-- ACCIÓN PARA LA OPCIÓN 3
-            # Llama a tu función, que ahora envía la petición
             show_cp_available(driver_id, kafka_broker)
+            # Pausa para que el usuario pueda leer la lista que imprimirá el consumer
+            print(f"{Colors.YELLOW}Esperando respuesta de CPs... (Presione Enter si no aparece nada){Colors.RESET}")
+            input() # Pausa
+        
         else:
-            print("Opcion invalida.")
+            last_notification = f"{Colors.RED}Opcion invalida.{Colors.RESET}"
             
         time.sleep(0.1)
 
 def main():
     """Main execution entry point."""
     if len(sys.argv) != 4:
-        print("Usage: python EV_Driver.py <BROKER_IP> <BROKER_PORT> <DRIVER_ID>")
+        print(f"{Colors.RED}Usage: python EV_Driver.py <BROKER_IP> <BROKER_PORT> <DRIVER_ID>{Colors.RESET}")
         return
         
     KAFKA_BROKER = [f'{sys.argv[1]}:{sys.argv[2]}']
@@ -315,11 +395,14 @@ def main():
     # Start the response listener thread (must be started first)
     consumer_thread = threading.Thread(target=receive_responses, args=(KAFKA_BROKER, DRIVER_ID), daemon=True)
     consumer_thread.start()
+    
+    # Espera un segundo para que el consumidor se conecte antes de limpiar
+    time.sleep(1) 
 
     try:
         main_menu_loop(DRIVER_ID, KAFKA_BROKER)
     except KeyboardInterrupt:
-        print("\nExiting...")
+        print(f"\n{Colors.YELLOW}Exiting...{Colors.RESET}")
 
 if __name__ == "__main__":
     main()
