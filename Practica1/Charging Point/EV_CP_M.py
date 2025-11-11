@@ -18,9 +18,9 @@ class Colors:
     CYAN = '\033[96m'
 
 # --- 1. GLOBALES ---
-averia_activa = False
-CENTRAL_SOCKET = None
-CENTRAL_LOCK = threading.Lock()
+averia_activa = False # Flag para evitar spam de mensajes de avería
+CENTRAL_SOCKET = None # Socket persistente con la Central
+CENTRAL_LOCK = threading.Lock() # Lock para proteger el socket
 CP_ID_GLOBAL = "N/A"
 
 # --- GLOBALES UI ---
@@ -30,12 +30,12 @@ UI_ENGINE_ADDR = "N/A"
 UI_ENGINE_STATUS = "INICIANDO..."
 UI_CENTRAL_STATUS = "CONECTANDO..."
 UI_LAST_LOG_LINE = ""
-UI_LOCK = threading.Lock()
+UI_LOCK = threading.Lock() # Lock para proteger las variables de UI
 
 # --- 2. LÓGICA DE RED PERSISTENTE ---
 
 def send_to_central(message: str, expect_reply: bool = True) -> str:
-    """Envía un mensaje al socket persistente de la Central."""
+    """Envía un mensaje al socket persistente (thread-safe)."""
     global CENTRAL_SOCKET, UI_LAST_LOG_LINE, UI_CENTRAL_STATUS
     
     with CENTRAL_LOCK:
@@ -48,7 +48,7 @@ def send_to_central(message: str, expect_reply: bool = True) -> str:
         try:
             CENTRAL_SOCKET.sendall(message.encode('utf-8'))
             if not expect_reply:
-                return "OK" # Para PINGs
+                return "OK" # Usado para PINGs
             
             response = CENTRAL_SOCKET.recv(1024).decode('utf-8').strip()
             if not response:
@@ -56,27 +56,28 @@ def send_to_central(message: str, expect_reply: bool = True) -> str:
             return response
             
         except (socket.timeout, BrokenPipeError, ConnectionResetError, OSError) as e:
+            # Error de red: marcar el socket como muerto para reconexión
             with UI_LOCK:
                 UI_LAST_LOG_LINE = f"Error de conexión con Central: {e}"
                 UI_CENTRAL_STATUS = "ERROR (Socket Roto)"
-            CENTRAL_SOCKET = None # Marcar el socket como muerto
+            CENTRAL_SOCKET = None 
             return "ERROR"
         except Exception as e:
             with UI_LOCK: UI_LAST_LOG_LINE = f"Error socket inesperado: {e}"
             return "ERROR"
 
 def ping_thread(cp_id: str):
-    """Mantiene la conexión viva y permite a Central detectar la muerte."""
+    """Envía un PING periódico para mantener la conexión viva."""
     while CENTRAL_SOCKET is not None:
         time.sleep(5)
-        if CENTRAL_SOCKET is None: break
+        if CENTRAL_SOCKET is None: break # Salir si el socket murió
             
         if send_to_central(f"PING:{cp_id}", expect_reply=False) == "ERROR":
             with UI_LOCK:
                 UI_LAST_LOG_LINE = "Fallo al enviar PING (reconectando...)"
 
 def report_status_to_central(cp_id, status):
-    """Reporta el estado del Engine (Averiado/Activo) a la Central."""
+    """Informa a Central de un cambio de estado (Averiado/Activo)."""
     global averia_activa, UI_CENTRAL_STATUS, UI_LAST_LOG_LINE
     
     with UI_LOCK:
@@ -84,6 +85,7 @@ def report_status_to_central(cp_id, status):
         elif status == "ACTIVO": UI_CENTRAL_STATUS = "ACTIVO"
         else: UI_CENTRAL_STATUS = status
     
+    # Evitar spam: Solo enviar si el estado lógico (avería) cambia
     if (status == "AVERIADO" and not averia_activa) or (status == "ACTIVO" and averia_activa):
         with UI_LOCK:
             UI_LAST_LOG_LINE = f"--- Notificando a CENTRAL: {status} ---"
@@ -92,7 +94,7 @@ def report_status_to_central(cp_id, status):
         averia_activa = (status == "AVERIADO")
 
 def watchmen_thread(cp_id, engine_ip, engine_port):
-    """Hilo que vigila el Engine y reporta a la Central si este falla."""
+    """Hilo vigilante que chequea la salud del Engine (local)."""
     global UI_ENGINE_STATUS, UI_LAST_LOG_LINE
     while CENTRAL_SOCKET is not None: # Si la Central se cae, este hilo muere
         try:
@@ -124,21 +126,15 @@ def watchmen_thread(cp_id, engine_ip, engine_port):
                     time.sleep(1)
         
         except Exception as e:
+            # El Engine no responde: notificar avería a la Central
             with UI_LOCK:
                 UI_ENGINE_STATUS = "ERROR (NO CONECTADO)"
                 UI_LAST_LOG_LINE = f"Error Engine: {e}"
             report_status_to_central(cp_id, "AVERIADO")
-            time.sleep(5)
+            time.sleep(5) # Esperar antes de reintentar
 
-# ---
-# --- FUNCIÓN DE CONEXIÓN Y REGISTRO (CORREGIDA) ---
-# ---
 def connect_or_register(server_ip, server_port, cp_id) -> bool:
-    """
-    Intenta conectar y autenticar. Si es rechazado,
-    pregunta al usuario si desea registrar el CP.
-    Esta función es BLOQUEANTE y usa input().
-    """
+    """Conecta y autentica. Si es un CP nuevo, pide registro por input."""
     global CENTRAL_SOCKET, UI_CENTRAL_STATUS, UI_LAST_LOG_LINE
     
     with UI_LOCK: UI_CENTRAL_STATUS = "CONECTANDO..."
@@ -147,7 +143,6 @@ def connect_or_register(server_ip, server_port, cp_id) -> bool:
         sock.settimeout(5)
         sock.connect((server_ip, server_port))
         
-        # Guardamos el socket globalmente
         with CENTRAL_LOCK:
             CENTRAL_SOCKET = sock
         
@@ -161,7 +156,7 @@ def connect_or_register(server_ip, server_port, cp_id) -> bool:
             print(f"{Colors.GREEN}Autenticación exitosa.{Colors.RESET}")
             return True
         
-        # 2. Si es Rechazado -> Preguntar para Registrar
+        # 2. Si es Rechazado -> Iniciar flujo de Registro
         if resp == "RECHAZADO:":
             _clear_screen()
             print(f"{Colors.YELLOW}ADVERTENCIA: CP '{cp_id}' no está registrado en la Central.{Colors.RESET}")
@@ -192,7 +187,6 @@ def connect_or_register(server_ip, server_port, cp_id) -> bool:
                 with CENTRAL_LOCK: CENTRAL_SOCKET.close(); CENTRAL_SOCKET = None
                 return False
         
-        # Si la respuesta no es ACEPTADO ni RECHAZADO:
         print(f"{Colors.RED}Error de protocolo inesperado: {resp}{Colors.RESET}")
         with CENTRAL_LOCK: CENTRAL_SOCKET.close(); CENTRAL_SOCKET = None
         return False
@@ -205,16 +199,10 @@ def connect_or_register(server_ip, server_port, cp_id) -> bool:
             CENTRAL_SOCKET = None
         return False
 
-# --- 3. UI (CORREGIDA) ---
+# --- 3. UI ---
 def main_ui_loop():
-    """Bucle principal de la UI. Se ejecuta en el hilo principal."""
-    # ---
-    # --- CORRECCIÓN DEL SYNTAXERROR ---
-    # ---
+    """Bucle principal de la UI (se ejecuta en el hilo main)."""
     global UI_LAST_LOG_LINE, CENTRAL_SOCKET
-    # ---
-    # --- FIN DE LA CORRECCIÓN ---
-    # ---
     last_log = ""
     
     while CENTRAL_SOCKET is not None:
@@ -243,11 +231,9 @@ def main_ui_loop():
         print("------------------------------------------------")
         print(f"{Colors.BOLD}LOG:{Colors.RESET} {last_log}")
         
-        time.sleep(1)
+        time.sleep(1) # El Ctrl+C será capturado por el main
 
-# ---
-# --- 4. MAIN (CORREGIDO) ---
-# ---
+# --- 4. MAIN ---
 def __main__():
     global UI_CP_ID, UI_CENTRAL_ADDR, UI_ENGINE_ADDR, CP_ID_GLOBAL, CENTRAL_SOCKET, averia_activa
     
@@ -277,24 +263,26 @@ def __main__():
                 threading.Thread(target=watchmen_thread, args=(cp_id, eng_ip, eng_port), daemon=True).start()
 
                 # 3. El hilo principal se convierte en la UI
-                main_ui_loop() # Esto bloquea hasta que el socket muere
+                main_ui_loop() # Bloquea hasta que el socket muere o hay Ctrl+C
 
                 print(f"{Colors.RED}Socket central desconectado. Reiniciando...{Colors.RESET}")
-                averia_activa = False # Resetear estado de avería al reconectar
+                averia_activa = False # Resetear estado al reconectar
             
             else:
-                # Si el registro/conexión falla (p.ej. usuario dice 'n')
+                # Falla de registro o conexión (p.ej. usuario dice 'n')
                 print(f"{Colors.RED}Fallo de conexión/registro. Reintentando en 5 segundos...{Colors.RESET}")
                 time.sleep(5)
         
-        time.sleep(1) # Pequeña pausa en el bucle externo
+        time.sleep(1) # Pausa del bucle de reconexión
 
 if __name__ == "__main__":
     try:
         __main__()
     except KeyboardInterrupt:
-        print(f"\n{Colors.MAGENTA}Cerrando Monitor...{Colors.RESET}")
+        # Captura Ctrl+C, cierra el socket y termina
+        print(f"\n{Colors.MAGENTA}Cerrando Monitor (Ctrl+C)...{Colors.RESET}")
         if CENTRAL_SOCKET:
-            CENTRAL_SOCKET.close()
-            
-            
+            with CENTRAL_LOCK:
+                CENTRAL_SOCKET.close()
+                CENTRAL_SOCKET = None
+        sys.exit(0)
