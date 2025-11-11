@@ -131,7 +131,7 @@ def receive_responses(driver_id: str):
             
             for message in consumer:
                 response_str = message.value.decode('utf-8')
-                print(f"{Colors.BLUE}[KAFKA RECV] Recibido en {message.topic}: {response_str}{Colors.RESET}") 
+                
                 
                 if message.topic == KAFKA_RESPONSE:
                     parts = response_str.split(':')
