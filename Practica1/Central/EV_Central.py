@@ -98,8 +98,11 @@ def reset_cp_state():
                 if not line: continue
                 parts = line.split(':')
                 if len(parts) >= 4:
-                    cp_id, location, price = parts[0], parts[1], parts[2]
-                    updated_lines.append(f"{cp_id}:{location}:{price}:{STATUS_DESCONECTADO}\n")
+                    cp_id, location, price, status = parts[0], parts[1], parts[2], parts[3]
+                    if status != STATUS_SUMINISTRANDO and status != STATUS_AVERIA:
+                        updated_lines.append(f"{cp_id}:{location}:{price}:{STATUS_DESCONECTADO}\n")
+                    else:
+                        updated_lines.append(f"{cp_id}:{location}:{price}:{status}")
         with open(input_file, "w") as file: # Sobrescribir directamente
             file.writelines(updated_lines)
         print(f"[INIT] Estados reseteados a {STATUS_DESCONECTADO} en '{input_file}'.")
