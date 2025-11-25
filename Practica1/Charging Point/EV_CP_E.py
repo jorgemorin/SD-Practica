@@ -1,4 +1,3 @@
-# --- Imports ---
 import socket
 import sys
 import threading
@@ -29,12 +28,12 @@ class Colors:
 # --- 1. Variables Globales (Lógica) ---
 KAFKA_ADDR = ()
 ENGINE_LISTEN_ADDR = ()
-simular_averia = False # Flag de estado de avería
-kafka_producer = None # Productor persistente para telemetría
+simular_averia = False 
+kafka_producer = None 
 cp_id = "CP_SIN_ID" 
 charge_request_pending = False
 precio_kwh = 0.0
-is_paused = False # Flag de pausa administrativa
+is_paused = False 
 
 # Estado de la sesión de carga actual
 current_charge = {
@@ -45,15 +44,14 @@ current_charge = {
 }
 
 # --- 2. Globales para la UI ---
-UI_LOCK = threading.Lock() # Protege logs y UI_MONITOR_CLIENT
+UI_LOCK = threading.Lock() 
 UI_KAFKA_ADDR = "N/A"
 UI_MONITOR_ADDR = "N/A"
 UI_LAST_LOGS = []
-UI_MONITOR_CLIENT = "N/A" # IP:Puerto del monitor conectado
-_original_print = print # Guardar print original
+UI_MONITOR_CLIENT = "N/A" 
+_original_print = print 
 
 def _add_log(message: str):
-    """Añade un mensaje al log de la UI (thread-safe)."""
     with UI_LOCK:
         log_entry = f"{time.strftime('%H:%M:%S')} {message}"
         UI_LAST_LOGS.append(log_entry)
@@ -61,19 +59,17 @@ def _add_log(message: str):
             UI_LAST_LOGS.pop(0)
 
 def hijacked_print(*args, **kwargs):
-    """Redirige todos los 'print' al log de la UI."""
     output_buffer = StringIO()
     _original_print(*args, file=output_buffer, **kwargs)
     message = output_buffer.getvalue().strip()
     output_buffer.close()
     if message: _add_log(message)
 
-print = hijacked_print # Sobrescribir print global
+print = hijacked_print 
 
 # --- 4. Lógica de Negocio ---
 
 def create_kafka_producer(kafka_ip_port_str):
-    """Inicializa el productor de Kafka para telemetría."""
     global kafka_producer
     try:
         kafka_producer = KafkaProducer(
@@ -86,15 +82,12 @@ def create_kafka_producer(kafka_ip_port_str):
         _original_print(f"{Colors.RED}[ERROR] Fallo Productor Kafka: {e}{Colors.RESET}")
 
 def _trigger_failure_state():
-    """Función centralizada para manejar un estado de avería."""
     global simular_averia, current_charge, kafka_producer, cp_id, precio_kwh, is_paused
-    
-    if simular_averia: return # Evitar ejecuciones múltiples
+    if simular_averia: return 
     
     simular_averia = True
     print(f"{Colors.RED}[!!!] ESTADO DE AVERÍA ACTIVADO.{Colors.RESET}")
     
-    # Si estaba cargando o pausado, interrumpir y enviar TICKET de avería
     if current_charge["active"] or is_paused:
         driver = current_charge['driver_id']
         print(f"{Colors.RED}[!!!] Interrumpiendo carga de {driver} por avería.{Colors.RESET}")
@@ -113,16 +106,13 @@ def _trigger_failure_state():
         current_charge["driver_id"] = None
 
 def start_supply_simulation_thread():
-    """Simula el consumo (KWh) cada segundo y envía telemetría."""
     global current_charge, kafka_producer, cp_id, precio_kwh, is_paused
     while True:
-        # Solo sumar si está activo, no pausado y no averiado
         if current_charge["active"] and kafka_producer and not is_paused and not simular_averia:
             current_charge["kwh_consumed"] += 0.01
             kwh = round(current_charge['kwh_consumed'], 2)
             cost = round(kwh * precio_kwh, 2)
             try:
-                # Envía telemetría a la Central
                 kafka_producer.send('CPTelemetry', f"SUMINISTRANDO:{cp_id}:{kwh}:{cost}")
             except Exception: pass
             time.sleep(1) 
@@ -131,7 +121,7 @@ def start_supply_simulation_thread():
 
 def user_interface_thread():
     """Bucle principal de UI y entrada de usuario (teclas)."""
-    global simular_averia, charge_request_pending, current_charge, cp_id, precio_kwh, is_paused
+    global simular_averia, charge_request_pending, current_charge, cp_id, precio_kwh, is_paused, kafka_producer
     
     while True:
         try:
@@ -165,21 +155,56 @@ def user_interface_thread():
 
             for log in logs: _original_print(f" {log}")
             _original_print("----------------------------------------")
+            # --- MENU MODIFICADO ---
             _original_print("[a] Simular Avería | [r] Resolver Avería | [e] Enchufar | [d] Desenchufar")
+            _original_print(f"[m] {Colors.YELLOW}Solicitud Manual (Local){Colors.RESET}")
             
             comando = input(f"\n{Colors.BOLD}> {Colors.RESET}").strip().lower()
             
             if comando == 'a':
-                # Simular avería manualmente
                 _trigger_failure_state()
 
             elif comando == 'r':
-                # Resolver avería manualmente
                 simular_averia = False
                 print(f"{Colors.GREEN}[OK] AVERÍA RESUELTA (Monitor debe reconectarse).{Colors.RESET}")
 
+            # --- NUEVA OPCIÓN 'm' ---
+            elif comando == 'm':
+                if current_charge["active"] or charge_request_pending:
+                    print(f"{Colors.RED}[!] CP ocupado o solicitud ya pendiente.{Colors.RESET}")
+                    time.sleep(1.5)
+                    continue
+
+                if simular_averia or is_paused:
+                    print(f"{Colors.RED}[!] No se puede solicitar carga en estado actual.{Colors.RESET}")
+                    time.sleep(1.5)
+                    continue
+                
+                # Pedir Driver ID
+                try:
+                    input_driver = input(f" {Colors.YELLOW}>> Introduzca ID del Conductor para recarga manual: {Colors.RESET}").strip()
+                except: input_driver = ""
+                
+                if not input_driver:
+                    print(f"{Colors.RED}[!] ID inválido. Volviendo al menú...{Colors.RESET}")
+                    time.sleep(1.5)
+                    continue
+                
+                # Enviar solicitud a Kafka (Topic DriverRequest)
+                if kafka_producer:
+                    print(f"{Colors.YELLOW}Enviando solicitud para {input_driver}...{Colors.RESET}")
+                    try:
+                        # Usamos el mismo formato que usa Driver.py: REQUEST:DRIVER_ID:CP_ID
+                        kafka_producer.send('DriverRequest', f"REQUEST:{input_driver}:{cp_id}")
+                        print(f"{Colors.GREEN}Solicitud enviada. Espere 'SOLICITUD' en pantalla...{Colors.RESET}")
+                    except Exception as e:
+                        print(f"{Colors.RED}Error enviando a Kafka: {e}{Colors.RESET}")
+                    time.sleep(2)
+                else:
+                    print(f"{Colors.RED}Error: Kafka no conectado.{Colors.RESET}")
+                    time.sleep(1.5)
+
             elif comando == 'e':
-                # Simular "enchufar"
                 if charge_request_pending and not is_paused and not simular_averia:
                     charge_request_pending = False
                     current_charge["active"] = True
@@ -188,15 +213,20 @@ def user_interface_thread():
                      print(f"{Colors.YELLOW}[!] No se puede enchufar mientras está PAUSADO.{Colors.RESET}")
                 elif simular_averia:
                      print(f"{Colors.RED}[!] No se puede enchufar, el CP está AVERIADO.{Colors.RESET}")
+                else:
+                    print(f"{Colors.YELLOW}[!] No hay solicitud pendiente. Use 'm' para crear una.{Colors.RESET}")
+                    time.sleep(1)
 
             elif comando == 'd':
-                # Simular "desenchufar"
                 if current_charge["active"] or (is_paused and current_charge["driver_id"] is not None):
                     print(f"{Colors.MAGENTA}[<<<] DESENCHUFADO.{Colors.RESET}")
                     kwh, cost = round(current_charge['kwh_consumed'], 2), round(current_charge['kwh_consumed'] * precio_kwh, 2)
-                    # Enviar TICKET final
                     if kafka_producer and current_charge['driver_id']:
+                         # Enviar también señal de STOP al topic de requests para cerrar ciclo en Central si es necesario
+                         kafka_producer.send('DriverRequest', f"STOP:{current_charge['driver_id']}:{cp_id}")
+                         # Enviar TICKET
                          kafka_producer.send('CPTelemetry', f"TICKET:{cp_id}:{current_charge['driver_id']}:{kwh}:{cost}")
+                    
                     current_charge["active"] = False
                     current_charge["driver_id"] = None
                     is_paused = False 
@@ -215,10 +245,11 @@ def start_kafka_consumer_thread():
         for message in consumer:
             msg = message.value.decode('utf-8')
             parts = msg.split(':')
-            if len(parts) < 2 or parts[1] != cp_id: continue # Filtrar mensajes para este CP
+            if len(parts) < 2 or parts[1] != cp_id: continue 
 
             cmd = parts[0]
             if cmd == "START" and len(parts) == 3 and not current_charge["active"] and not simular_averia:
+                # AQUÍ ES DONDE SE ACTIVA LA SOLICITUD TRAS EL 'REQUEST' MANUAL
                 current_charge.update({"driver_id": parts[2], "kwh_consumed": 0.0})
                 charge_request_pending = True
                 print(f"{Colors.YELLOW}[!] SOLICITUD DE CARGA de {parts[2]}. Pulse 'e'.{Colors.RESET}")
@@ -237,7 +268,6 @@ def start_kafka_consumer_thread():
     except Exception as e: print(f"{Colors.RED}[ERROR KAFKA CONSUMER] {e}{Colors.RESET}")
 
 def load_config(filename="engine.conf"):
-    """Carga configuración (ID, Precio) desde engine.conf."""
     config = {}
     try:
         base = os.path.dirname(os.path.abspath(__file__))
@@ -252,7 +282,6 @@ def load_config(filename="engine.conf"):
         return None
 
 def handle_monitor_connection(conn, addr):
-    """Maneja la conexión socket del Monitor (local)."""
     global simular_averia, is_paused, UI_MONITOR_CLIENT
     
     with UI_LOCK:
@@ -265,9 +294,8 @@ def handle_monitor_connection(conn, addr):
     try:
         while True:
             if not conn.recv(1024): 
-                break # Monitor desconectado
+                break 
             
-            # Responder al HEALTH_CHECK
             if simular_averia: 
                 conn.sendall(b"KO: AVERIA SIMULADA")
             elif is_paused: 
@@ -275,20 +303,16 @@ def handle_monitor_connection(conn, addr):
             else: 
                 conn.sendall(b"OK")
     except (socket.timeout, ConnectionResetError, BrokenPipeError):
-        pass # Monitor desconectado
+        pass 
     except Exception as e:
         print(f"Error en Hilo Monitor: {e}")
     finally:
         with UI_LOCK: 
             UI_MONITOR_CLIENT = "N/A"
-        
-        # Si el monitor se desconecta, disparamos la avería interna
-        print(f"{Colors.RED}[!!!] Conexión del Monitor perdida. Disparando avería...{Colors.RESET}")
-        _trigger_failure_state()
+        print(f"{Colors.RED}[!!!] Conexión del Monitor perdida.{Colors.RESET}")
         conn.close()
 
 def start_monitor_server():
-    """Abre un socket server para que el Monitor se conecte."""
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.bind(ENGINE_LISTEN_ADDR)
@@ -313,17 +337,16 @@ def __main__():
     create_kafka_producer(UI_KAFKA_ADDR)
     if not kafka_producer: return
 
-    # Iniciar hilos de trabajo
     threading.Thread(target=start_monitor_server, daemon=True).start()
     threading.Thread(target=start_kafka_consumer_thread, daemon=True).start()
     threading.Thread(target=start_supply_simulation_thread, daemon=True).start()
     
     try:
-        user_interface_thread() # Hilo principal se convierte en UI
+        user_interface_thread() 
     except KeyboardInterrupt: 
         pass
     finally:
-        print = _original_print # Restaurar print original
+        print = _original_print 
         if kafka_producer: kafka_producer.close()
 
 if __name__ == "__main__":
