@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from kafka import KafkaConsumer, KafkaProducer
 import socket
 import threading
@@ -6,13 +7,35 @@ import os
 import time
 from typing import List, Dict, Any, Optional, Tuple
 
+# --- 0. VISUALS ---
+if os.name == 'nt':
+    os.system('color') # Habilitar colores ANSI en Windows
+
+def _clear_screen():
+    """Limpia la pantalla de la terminal."""
+    os.system('cls' if os.name == 'nt' else 'clear')
+
+class Colors:
+    """Clase para colores de terminal ANSI."""
+    RESET = '\033[0m'
+    BOLD = '\033[1m'
+    RED = '\033[91m'
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    BLUE = '\033[94m'
+    MAGENTA = '\033[95m'
+    CYAN = '\033[96m'
+    WHITE = '\033[97m'
+    BG_GREEN = '\033[42m'
+    BG_ORANGE = '\033[48;5;208m'
+    BG_RED = '\033[41m'
+    BG_GREY = '\033[100m'
+
 # --- 1. CONFIGURATION AND CONSTANTS ---
-# Topic Definitions
 KAFKA_REQUEST_TOPIC = 'DriverRequest'
 KAFKA_RESPONSE_TOPIC = 'DriverResponse'
-KAFKA_TELEMETRY_TOPIC = 'CPTelemetry' # NEW: Topic for CP monitoring (Punto 8)
+KAFKA_TELEMETRY_TOPIC = 'CPTelemetry'
 KAFKA_ENGINE_TOPIC = 'commands_to_cp'
-KAFKA_TICKET_TOPIC = 'TicketResponse'
 KAFKA_BROKER_ADDR = None
 
 # Kafka Timeout Optimization (ms)
@@ -20,21 +43,40 @@ FAST_INIT_TIMEOUT = 10001
 CONSUMER_SESSION_TIMEOUT = 10000
 CONSUMER_HEARTBEAT = 3000
 
-# Server/Socket Config
-HOST = '0.0.0.0' # Listen on all interfaces
+HOST = '0.0.0.0'
 FORMAT = 'utf-8'
 
-# Status Definitions (Completed based on practice document)
-STATUS_ACTIVO = 'ACTIVO'           # VERDE
-STATUS_SUMINISTRANDO = 'SUMINISTRANDO' # VERDE con datos
-STATUS_PARADO = 'PARADO'           # NARANJA / Out of Order
-STATUS_AVERIA = 'AVERIADO'           # ROJO
-STATUS_DESCONECTADO = 'DESCONECTADO' # GRIS
+# Status Definitions
+STATUS_ACTIVO = 'ACTIVO'
+STATUS_SUMINISTRANDO = 'SUMINISTRANDO'
+STATUS_PARADO = 'PARADO'
+STATUS_AVERIA = 'AVERIADO'
+STATUS_DESCONECTADO = 'DESCONECTADO'
 
-# --- 2. DATA STRUCTURES (Simulated Database) ---
+# --- 2. DATA STRUCTURES ---
 cp_registry: dict[str, dict] = {}
 driver_registry: set[str] = set()
-# --- 3. UTILITY FUNCTIONS (Protocol and DB) ---
+
+# --- GLOBALES UI ---
+UI_LOCK = threading.Lock()
+UI_LAST_LOGS = []
+cp_telemetry: Dict[str, Dict[str, Any]] = {}
+ongoing_requests: List[Dict[str, str]] = []
+
+# --- MODIFICACIÓN: Productor de Kafka Global ---
+KAFKA_PRODUCER: Optional[KafkaProducer] = None
+PRODUCER_LOCK = threading.Lock()
+# ---
+
+def _add_log(message: str, color: str = Colors.WHITE):
+    with UI_LOCK:
+        timestamp = time.strftime('%H:%M:%S')
+        log_entry = f"{Colors.CYAN}[{timestamp}]{Colors.RESET} {color}{message}{Colors.RESET}"
+        UI_LAST_LOGS.append(log_entry)
+        if len(UI_LAST_LOGS) > 8:
+            UI_LAST_LOGS.pop(0)
+
+# --- 3. UTILITY FUNCTIONS ---
 
 def build_protocol_response(message_type: str, payload: str = "") -> bytes:
     return f"{message_type}:{payload}".encode(FORMAT)
@@ -43,65 +85,34 @@ def parse_protocol(data: bytes) -> Optional[str]:
     try:
         return data.decode(FORMAT).strip()
     except UnicodeDecodeError:
-        print("[ERROR] Failed to decode message.")
+        _add_log("ERROR: Failed to decode message.", Colors.RED)
         return None
 
 def reset_cp_state():
     input_file = "ChargingPoints.txt"
-    output_file = "ChargingPoints.txt.tmp"
     updated_lines = []
-    
     try:
-        # 1. Leer el fichero original
         with open(input_file, "r") as file:
             for line in file:
                 line = line.strip()
-                if not line:
-                    continue
-                    
+                if not line: continue
                 parts = line.split(':')
-                
-                # Formato esperado: ID:Localizacion:Precio:Estado
                 if len(parts) >= 4:
-                    cp_id = parts[0]
-                    location = parts[1]
-                    price = parts[2]
-                    status = parts[3].upper() # Convertir a mayusculas por si acaso
-                    
-                    # 2. Aplicar la logica de reseteo
-                    new_status = STATUS_DESCONECTADO
-                        
-                    # 3. Construir la nueva linea
-                    updated_lines.append(f"{cp_id}:{location}:{price}:{new_status}\n")
-                else:
-                    print(f"[WARN] Linea mal formada omitida: {line}")
-                    
-    except FileNotFoundError:
-        print(f"[ERROR] No se encontro el fichero '{input_file}'. No se reseteo ningun estado.")
-        return
-    except Exception as e:
-        print(f"[ERROR] Ocurrio un error leyendo el fichero: {e}")
-        return
-
-    try:
-        # 4. Escribir en un fichero temporal
-        with open(output_file, "w") as file:
+                    cp_id, location, price, status = parts[0], parts[1], parts[2], parts[3]
+                    if status != STATUS_SUMINISTRANDO and status != STATUS_AVERIA:
+                        updated_lines.append(f"{cp_id}:{location}:{price}:{STATUS_DESCONECTADO}\n")
+                    else:
+                        updated_lines.append(f"{cp_id}:{location}:{price}:{status}")
+        with open(input_file, "w") as file: # Sobrescribir directamente
             file.writelines(updated_lines)
-            
-        # 5. Reemplazar el fichero original de forma atomica (segura)
-        os.replace(output_file, input_file)
-        
-        print(f"[OK] Se han reseteado los estados en '{input_file}'.")
-        print(f"   {len(updated_lines)} CPs actualizados a DESCONECTADO (excepto AVERIADOS/PARADOS).")
-
+        print(f"[INIT] Estados reseteados a {STATUS_DESCONECTADO} en '{input_file}'.")
+    except FileNotFoundError:
+        print(f"[WARNING] No se encontro '{input_file}'. Se creará uno nuevo al guardar.")
     except Exception as e:
-        print(f"[ERROR] Ocurrio un error escribiendo el fichero actualizado: {e}")
-        # Intentar borrar el temporal si algo salio mal
-        if os.path.exists(output_file):
-            os.remove(output_file)
+        print(f"[ERROR] Error reseteando fichero: {e}")
+
 
 def read_data_cp():
-    """Reads CP data from ChargingPoints.txt into cp_registry."""
     try:
         file = open("ChargingPoints.txt", "r")
         for line in file:
@@ -112,168 +123,51 @@ def read_data_cp():
                     "location": location,
                     "price": float(price),
                     "status": status,
-                    "addr": None # Address is set on socket connection
+                    "addr": None
                 }
         file.close()
-        print(f"[SERVER] Data loaded from ChargingPoints.txt. {len(cp_registry)} CPs found.")
+        print(f"[INIT] {len(cp_registry)} CPs cargados.")
     except FileNotFoundError:
-        print("[WARNING] ChargingPoints.txt not found. Starting with empty database.")
-    except Exception as e:
-        print(f"[ERROR] Error reading data: {e}")
-
+        print("[WARNING] ChargingPoints.txt not found. Starting with empty DB.")
 
 def write_data_cp():
-    """Writes current cp_registry data to ChargingPoints.txt."""
     try:
         file = open("ChargingPoints.txt", "w")
         for cp_id, info in cp_registry.items():
             line = f"{cp_id}:{info['location']}:{info['price']}:{info['status']}\n"
             file.write(line)
         file.close()
-        print("[SERVER] Data saved to ChargingPoints.txt")
     except Exception as e:
-        print(f"[ERROR] Failed to write to ChargingPoints.txt: {e}")
+        _add_log(f"ERROR writing ChargingPoints.txt: {e}", Colors.RED)
 
-# --- 4. KAFKA PRODUCER/CONSUMER LOGIC ---
-
-def send_request_decision_to_driver(driver_id: str, cp_id: str, decision: str):
-    """Sends the final decision (ACEPTADO/RECHAZADO) back to the Driver via Kafka (Punto 4, 176)."""
-    global KAFKA_BROKER_ADDR
-    try:
-        producer = KafkaProducer(
-            bootstrap_servers=KAFKA_BROKER_ADDR,
-            api_version=(4, 1, 0),
-            request_timeout_ms=FAST_INIT_TIMEOUT
-        )
-        # Format: DECISION:DRIVER_ID:CP_ID
-        message = f"{decision}:{driver_id}:{cp_id}"
-        future = producer.send(KAFKA_RESPONSE_TOPIC, value=message.encode('utf-8'))
-        future.get(timeout=100)
-        print(f"[KAFKA CENTRAL] Sent decision to driver: {message}")
-    except Exception as e:
-        print(f"[KAFKA] ERROR: Failed to send decision to driver: {e}")
-    finally:
-        if 'producer' in locals():
-            producer.close()
-
-def send_authorization_to_cp_via_socket(cp_id: str, driver_id: str) -> bool:
-    """NEW: Central acts as a client to request authorization from the CP (Punto 4, 175)."""
-    if cp_id not in cp_registry or cp_registry[cp_id]['addr'] is None:
-        print(f"[SOCKET CLIENT] ERROR: CP {cp_id} not registered or address unknown.")
-        return False
-
-    cp_addr = cp_registry[cp_id]['addr']
-    cp_ip, cp_port = cp_addr
-
-    try:
-        client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        # Reemplazar el puerto de CENTRAL por el puerto del CP Engine (se asume que es el mismo que el Engine esta escuchando)
-        # NOTA: En un despliegue real, la BD de CPs almacenaria el puerto de escucha del Engine.
-        # Aqui se usa el puerto de registro guardado. Se asume que el CP Monitor se registro con la IP y Puerto del CP Engine.
-        # Si no se envio el puerto del CP Engine, se utiliza el puerto de registro.
-        # Para evitar complejidades de puerto en el monitor/engine, usaremos el IP del CP Engine que es el que se conecta al monitor.
-        # Como no se tiene el puerto de escucha del CP Engine, se asume que el CP Engine escucha en un puerto predefinido (e.g. 5001)
-
-        # SIMPLIFICACIoN: Dado que el REGISTRO no incluye el puerto de escucha del Engine
-        # Se asume que el CP Engine escucha en el mismo IP que se registro el Monitor, en el PORT_SOCKET + 1
-        # ESTO DEBE SER ACLARADO EN LA PRaCTICA, pero por ahora se usara el puerto 5001 como ejemplo de Engine
-        # El socket de registro (Monitor) es el 5000. El socket de Autorizacion (Engine) sera el 5001.
-
-        # Se usara la IP del CP que se registro.
-        client_socket.connect((cp_ip, 5001)) # Asumir puerto 5001 para el Engine (para el control)
-        
-        # Protocolo de Solicitud de Autorizacion: AUTORIZAR:DRIVER_ID
-        request_msg = f"AUTORIZAR:{driver_id}".encode(FORMAT)
-        client_socket.sendall(request_msg)
-
-        # Esperar respuesta del CP Engine
-        response_data = client_socket.recv(1024)
-        response_msg = parse_protocol(response_data)
-        
-        if response_msg and response_msg.startswith("ACEPTADO"):
-            print(f"[SOCKET CLIENT] CP {cp_id} authorized supply for Driver {driver_id}.")
-            return True
-        else:
-            print(f"[SOCKET CLIENT] CP {cp_id} rejected authorization for Driver {driver_id}.")
-            return False
-
-    except Exception as e:
-        print(f"[SOCKET CLIENT] ERROR: Failed to communicate with CP {cp_id}: {e}")
-        return False
-    finally:
-        if 'client_socket' in locals():
-            client_socket.close()
-
-#####################################################################################
 def read_data_driver():
-    """Reads Driver data from Drivers.txt into driver_registry."""
     global driver_registry
     try:
         with open("Drivers.txt", "r") as file:
             for line in file:
-                driver_id = line.strip()
-                if driver_id:
-                    driver_registry.add(driver_id)
-        print(f"[SERVER] Data loaded from Drivers.txt. {len(driver_registry)} Drivers found.")
+                if line.strip(): driver_registry.add(line.strip())
+        print(f"[INIT] {len(driver_registry)} Drivers cargados.")
     except FileNotFoundError:
-        print("[WARNING] Drivers.txt not found. Starting with empty driver database.")
-    except Exception as e:
-        print(f"[ERROR] Error reading driver data: {e}")
+        print("[WARNING] Drivers.txt not found.")
 
 def write_data_driver():
-    """Writes current driver_registry data to Drivers.txt."""
     global driver_registry
     try:
         with open("Drivers.txt", "w") as file:
             for driver_id in driver_registry:
                 file.write(f"{driver_id}\n")
-        print("[SERVER] Driver data saved to Drivers.txt")
     except Exception as e:
-        print(f"[ERROR] Failed to write to Drivers.txt: {e}")
+        _add_log(f"ERROR writing Drivers.txt: {e}", Colors.RED)
 
-def authenticate_driver(driver_id: str):
-    """
-    Auto-registers a new driver upon their first request.
-    In a real system, this would be a complex auth process. Here, we auto-add them.
-    """
-    global driver_registry
-    if driver_id not in driver_registry:
-        print(f"[AUTH] New driver '{driver_id}' detected. Auto-registering...")
-        driver_registry.add(driver_id)
-        write_data_driver() # Guardamos el nuevo driver en Drivers.txt
-        print(f"[AUTH] Driver '{driver_id}' successfully registered.")
-        return True
-    else:
-        # El driver ya existía, la autenticación es válida
+# --- 4. KAFKA PRODUCER/CONSUMER ---
+
+def _initialize_producer() -> bool:
+    """(NUEVO) Inicializa el productor global de Kafka."""
+    global KAFKA_PRODUCER, KAFKA_BROKER_ADDR
+    if KAFKA_PRODUCER is not None:
         return True
     
-
-def send_active_cp_list(driver_id: str):
-    """
-    Recopila todos los CPs con estado 'ACTIVO' y los envía al Driver
-    a través del KAFKA_RESPONSE_TOPIC.
-    """
-    global cp_registry,KAFKA_BROKER_ADDR
-    
-    print(f"[CP LIST] Solicitud de lista recibida del Driver: {driver_id}")
-    
-    active_cps_list = []
-    
-    for cp_id, info in cp_registry.items():
-        if info["status"] == STATUS_ACTIVO:
-            # Formato: CP_ID(Localizacion)@Precio
-            cp_info_str = f"{cp_id}({info['location']})@{info['price']}€"
-            active_cps_list.append(cp_info_str)
-
-    # Construir el mensaje final
-    if active_cps_list:
-        # Unimos todos los CPs con un separador ":"
-        payload = ":".join(active_cps_list)
-        message = f"CP_LIST:{payload}"
-    else:
-        message = "CP_LIST:No hay puntos de carga activos en este momento."
-
-    # Enviar la respuesta al Driver (usando un productor temporal, 
+    _add_log(f"Intentando conectar productor Kafka a {KAFKA_BROKER_ADDR}...", Colors.YELLOW)
     try:
         producer = KafkaProducer(
             bootstrap_servers=KAFKA_BROKER_ADDR,
@@ -281,297 +175,366 @@ def send_active_cp_list(driver_id: str):
             request_timeout_ms=FAST_INIT_TIMEOUT,
             value_serializer=lambda v: v.encode('utf-8')
         )
-        
-        # Enviamos la lista al topic de respuestas
-        future = producer.send(KAFKA_RESPONSE_TOPIC, value=message)
-        future.get(timeout=10) # Espera a que se envíe
-        
-        print(f"[KAFKA CENTRAL] Enviada lista de CPs activos al Driver {driver_id}")
-
+        KAFKA_PRODUCER = producer
+        _add_log("Productor Kafka global CONECTADO.", Colors.GREEN)
+        return True
     except Exception as e:
-        print(f"[KAFKA] ERROR: No se pudo enviar la lista de CPs: {e}")
-    finally:
-        if 'producer' in locals():
-            producer.close()
+        _add_log(f"Fallo al crear productor Kafka global: {e}", Colors.RED)
+        return False
 
+def send_kafka_message(topic: str, message: str) -> bool:
+    """(MODIFICADO) Envía un mensaje usando el productor global."""
+    global KAFKA_PRODUCER
+    with PRODUCER_LOCK:
+        if KAFKA_PRODUCER is None:
+            _add_log("Productor Kafka nulo, intentando reconectar...", Colors.YELLOW)
+            if not _initialize_producer():
+                _add_log(f"Fallo de envío (Kafka): {topic} - {message}", Colors.RED)
+                return False
+        
+        try:
+            _add_log(f"Kafka ENVIANDO a {topic}: {message}", Colors.CYAN) # Log de envío
+            future = KAFKA_PRODUCER.send(topic, value=message)
+            future.get(timeout=10) # 10 segundos de timeout
+            return True
+        except Exception as e:
+            _add_log(f"Error al enviar Kafka ({topic}): {e}", Colors.RED)
+            if KAFKA_PRODUCER:
+                KAFKA_PRODUCER.close()
+            KAFKA_PRODUCER = None
+            return False
 
-
-######################################################################################
-
+def authenticate_driver(driver_id: str):
+    if driver_id not in driver_registry:
+        _add_log(f"AUTH: Nuevo driver '{driver_id}' registrado.", Colors.MAGENTA)
+        driver_registry.add(driver_id)
+        write_data_driver()
+    return True
 
 def _check_and_authorize_cp(driver_id_received: str, cp_id_received: str):
-    """
-    Implements Central's logic to check CP availability (Punto 4).
-    If ACTIVO, requests authorization from CP (via Sockets).
-    """
-    global KAFKA_BROKER_ADDR
-    producer = KafkaProducer(
-            bootstrap_servers=KAFKA_BROKER_ADDR,
-            api_version=(4, 1, 0),
-            request_timeout_ms=FAST_INIT_TIMEOUT
-    )
-    if not authenticate_driver(driver_id_received):
-        print(f"[DRIVER REQUEST] Authentication failed for {driver_id_received}.")
-    else:
-        print(f"[DRIVER REQUEST] Checking Charging Point status for {cp_id_received}...")
-        if cp_id_received in cp_registry:
-            cp_info = cp_registry[cp_id_received]
-            
-            # 1. Check availability
-            if cp_info['status'] == STATUS_ACTIVO:
-                print("[DRIVER REQUEST] Charging Point is ACTIVE. Requesting authorization from CP...")
-                
-                # 2. Punto 4: Request CP authorization (Sockets)
-                #if send_authorization_to_cp_via_socket(cp_id_received, driver_id_received):
-                decision = 'ACEPTADO'
-                # 3. If accepted by CP, CENTRAL changes state (Punto 4)
-                cp_registry[cp_id_received]['status'] = STATUS_SUMINISTRANDO
-                print(f"[DRIVER REQUEST] CP {cp_id_received} state changed to SUMINISTRANDO.")
-                write_data_cp() # Save state change
-                message = f"START:{cp_id_received}:{driver_id_received}"
-                future = producer.send(KAFKA_ENGINE_TOPIC, value=message.encode('utf-8'))
-                future.get(timeout=100)
-                print(f"[KAFKA CENTRAL] Sent message to driver: {message}")
+    with UI_LOCK:
+        ongoing_requests.append({
+            'date': time.strftime('%d/%m/%y'), 'time': time.strftime('%H:%M'),
+            'user_id': driver_id_received, 'cp_id': cp_id_received
+        })
+        if len(ongoing_requests) > 5: ongoing_requests.pop(0)
 
-                #else:
-                #    print("[DRIVER REQUEST] CP rejected the authorization (Socket response).")
-                
+    if not authenticate_driver(driver_id_received): return
+
+    if cp_id_received in cp_registry:
+        cp_info = cp_registry[cp_id_received]
+        if cp_info['status'] == STATUS_ACTIVO:
+            cp_registry[cp_id_received]['status'] = STATUS_SUMINISTRANDO
+            write_data_cp()
+            with UI_LOCK:
+                cp_telemetry[cp_id_received] = {'kwh': 0.0, 'cost': 0.0, 'driver': driver_id_received}
+
+            if send_kafka_message(KAFKA_ENGINE_TOPIC, f"START:{cp_id_received}:{driver_id_received}"):
+                _add_log(f"AUTORIZADO: {driver_id_received} -> {cp_id_received}", Colors.GREEN)
+                send_kafka_message(KAFKA_RESPONSE_TOPIC, f"ACEPTADO:{driver_id_received}:{cp_id_received}")
             else:
-                decision = 'RECHAZADO'
-                print(f"[DRIVER REQUEST] CP is unavailable ({cp_info['status']}). Rejecting.")
-                
+                cp_registry[cp_id_received]['status'] = STATUS_ACTIVO
+                _add_log(f"ERROR KAFKA: Fallo START a {cp_id_received}", Colors.RED)
+                send_kafka_message(KAFKA_RESPONSE_TOPIC, f"RECHAZADO:{driver_id_received}:{cp_id_received}")
         else:
-            decision = 'RECHAZADO'
-            print("[DRIVER REQUEST] Charging Point not found in registry. Rejecting.")
-
-    # 4. Punto 4, 176: CENTRAL notifies the Driver (Kafka)
-    send_request_decision_to_driver(driver_id_received, cp_id_received, decision)
+            _add_log(f"RECHAZADO: CP {cp_id_received} no ACTIVO ({cp_info['status']})", Colors.YELLOW)
+            send_kafka_message(KAFKA_RESPONSE_TOPIC, f"RECHAZADO:{driver_id_received}:{cp_id_received}")
+    else:
+        _add_log(f"RECHAZADO: CP {cp_id_received} desconocido", Colors.YELLOW)
+        send_kafka_message(KAFKA_RESPONSE_TOPIC, f"RECHAZADO:{driver_id_received}:{cp_id_received}")
 
 def read_consumer():
-    """Consumes requests from DriverRequest and Telemetry from CPTelemetry (Punto 8)."""
     global KAFKA_BROKER_ADDR
     topics = [KAFKA_REQUEST_TOPIC, KAFKA_TELEMETRY_TOPIC]
-    try:
-        consumer = KafkaConsumer(
-            *topics,
-            bootstrap_servers=KAFKA_BROKER_ADDR, 
-            auto_offset_reset='latest',
-            enable_auto_commit=True,
-            group_id='ev-central-group-1022-v3',
-            api_version=(4, 1, 0),
-            request_timeout_ms=FAST_INIT_TIMEOUT,
-            session_timeout_ms=CONSUMER_SESSION_TIMEOUT,
-            heartbeat_interval_ms=CONSUMER_HEARTBEAT
-        )
-        print(f"[KAFKA] Successfully connected and listening for messages on {topics}.")
-        
-        for message in consumer:
-            message_str = message.value.decode('utf-8')
-            print(f"[KAFKA] Received from {message.topic}: {message_str}")
+    
+    while True: # Bucle de reconexión para el consumidor
+        try:
+            consumer = KafkaConsumer(
+                *topics,
+                bootstrap_servers=KAFKA_BROKER_ADDR,
+                auto_offset_reset='latest',
+                enable_auto_commit=True,
+                group_id='ev-central-group-MAIN',
+                api_version=(4, 1, 0),
+                request_timeout_ms=FAST_INIT_TIMEOUT,
+                session_timeout_ms=CONSUMER_SESSION_TIMEOUT,
+                heartbeat_interval_ms=CONSUMER_HEARTBEAT
+            )
+            _add_log("Kafka Consumer conectado.", Colors.GREEN)
             
-            if message.topic == KAFKA_REQUEST_TOPIC:
-                parts = message_str.split(':')
-                if message_str.startswith("REQUEST:") and len(parts) >= 3:
-                    driver_id_received, cp_id_received = parts[1], parts[2]
-                    _check_and_authorize_cp(driver_id_received, cp_id_received)
+            for message in consumer:
+                msg_str = message.value.decode('utf-8')
+                parts = msg_str.split(':')
+                
+                if message.topic == KAFKA_REQUEST_TOPIC:
+                    _add_log(f"Kafka RECIBIDO (Request): {msg_str}", Colors.BLUE) # Log para depurar
+                    
+                    if msg_str.startswith("REQUEST:") and len(parts) >= 3:
+                        _check_and_authorize_cp(parts[1], parts[2])
+                    elif msg_str.startswith("STOP:") and len(parts) >= 3:
+                        pass # El Engine gestiona el stop real y envía TICKET
+                    elif msg_str.startswith("CP_REQUEST:") and len(parts) >= 2:
+                        active_cps = [f"{k}({v['location']})@{v['price']}€" 
+                                      for k, v in cp_registry.items() if v['status'] == STATUS_ACTIVO]
+                        payload = ":".join(active_cps) if active_cps else ""
+                        
+                        send_kafka_message(KAFKA_RESPONSE_TOPIC, f"CP_LIST:{payload}")
+                
+                elif message.topic == KAFKA_TELEMETRY_TOPIC:
+                    if msg_str.startswith("SUMINISTRANDO:") and len(parts) >= 4:
+                        cp_id, kwh, cost = parts[1], float(parts[2]), float(parts[3])
+                        if cp_id in cp_registry and cp_registry[cp_id]['status'] != STATUS_PARADO:
+                             cp_registry[cp_id]['status'] = STATUS_SUMINISTRANDO
+                        with UI_LOCK:
+                            if cp_id in cp_telemetry:
+                                cp_telemetry[cp_id]['kwh'] = kwh
+                                cp_telemetry[cp_id]['cost'] = cost
 
-                elif message_str.startswith("STOP:") and len(parts) >= 3:
-                    cp_id_stop = parts[2]
-                    if cp_id_stop in cp_registry and cp_registry[cp_id_stop]['status'] == STATUS_SUMINISTRANDO:
-                        # Punto 9: CP notifies Central of stop. Central marks as ACTIVO and sends ticket (ACK)
-                        cp_registry[cp_id_stop]['status'] = STATUS_ACTIVO
+                    elif msg_str.startswith("TICKET:") and len(parts) >= 5:
+                        cp_id, driver_id = parts[1], parts[2]
+                        send_kafka_message(KAFKA_RESPONSE_TOPIC, msg_str)
+                        
+                        if len(parts) == 6 and parts[5] == "AVERIA":
+                             _add_log(f"TICKET AVERÍA de CP {cp_id}", Colors.RED)
+                             cp_registry[cp_id]['status'] = STATUS_AVERIA
+                        else:
+                            _add_log(f"TICKET FINAL de CP {cp_id}", Colors.BLUE)
+                            if cp_registry[cp_id]['status'] != STATUS_PARADO:
+                                 cp_registry[cp_id]['status'] = STATUS_ACTIVO
+                        
                         write_data_cp()
-                        print(f"[KAFKA] Charging session stopped for CP {cp_id_stop}. Status set to ACTIVO.")
-                        # Send 'TICKET' to driver (Punto 9)
-                        driver_id_stop = parts[1] # Driver ID should be in parts[1]
-                        send_request_decision_to_driver(driver_id_stop, cp_id_stop, "TICKET_ENVIADO")
-                    else:
-                        print(f"[KAFKA] Received STOP for CP {cp_id_stop} not in SUMINISTRANDO.")
-                elif message_str.startswith("CP_REQUEST:") and len(parts)>=2:
-                    driver_id_received = parts[1]
-                    send_active_cp_list(driver_id_received)
-            
-            elif message.topic == KAFKA_TELEMETRY_TOPIC:
-                parts = message_str.split(':')
-                if message_str.startswith("TICKET:") and len(parts) >= 5:
-                    cp_id = parts[1]
-                    driver_id = parts[2]
-                    kwh = parts[3]
-                    cost = parts[4]
+                        with UI_LOCK:
+                            if cp_id in cp_telemetry: del cp_telemetry[cp_id]
+                            global ongoing_requests
+                            ongoing_requests = [r for r in ongoing_requests if not (r['user_id'] == driver_id and r['cp_id'] == cp_id)]
 
-                    producer = KafkaProducer(
-                        bootstrap_servers=KAFKA_BROKER_ADDR,
-                        api_version=(4, 1, 0),
-                        request_timeout_ms=FAST_INIT_TIMEOUT
-                    )
-                    if len(parts)==6:
-                        message = f"TICKET:{cp_id}:{driver_id}:{kwh}:{cost}:AVERIA"
-                    else:
-                        message = f"TICKET:{cp_id}:{driver_id}:{kwh}:{cost}"
-                    print(f"[KAFKA] Enviando: {message}")
-                    future = producer.send(KAFKA_RESPONSE_TOPIC, value=message.encode('utf-8'))
-                    future.get(timeout=100)
+        except Exception as e:
+            _add_log(f"FATAL KAFKA CONSUMER: {e}. Reintentando en 5s...", Colors.BG_RED)
+            time.sleep(5) # Esperar antes de reintentar
 
-                    if cp_registry[cp_id]['status'] != STATUS_AVERIA:
-                        cp_registry[cp_id]['status'] = STATUS_ACTIVO
-                        write_data_cp()
-
-            else:
-                print("[ERROR] Kafka")
-
-    except Exception as e:
-        print(f"[KAFKA] ERROR: Consumer thread failed: {e}")
-
-# --- 5. SOCKET/SERVER LOGIC ---
+# --- 5. SOCKET SERVER ---
 
 def handle_client(conn, addr):
-    print(f"[SOCKET] {addr} connected.")
     current_cp_id = None
-
     try:
         while True:
             data = conn.recv(1024)
             if not data: break
-            message = parse_protocol(data)
-            if message is None: continue
-            print(f"[RECEIVED] {addr}: {message}")
-            
-            parts = message.split(':')
+            msg = parse_protocol(data)
+            if not msg: continue
+            parts = msg.split(':')
             msg_type = parts[0].upper()
 
-            # Process Sockets messages (REGISTRO, ESTADO, AUTENTICACION)
-            if msg_type == "REGISTRO" and len(parts) >= 4: # Incluir la IP/Puerto del CP Engine (suponiendo que es el mismo que el Monitor, o el Engine escucha en el 5001)
+            if msg_type == "PING" and len(parts) >= 2:
                 current_cp_id = parts[1]
-                location = parts[2]
-                price = parts[3]
-                # El Monitor (handle_client) registra la IP/puerto desde donde se conecta
-                cp_ip_monitor = addr[0]
-                # El Engine escuchara en otro puerto (ej: 5001), pero la IP es la misma
-                cp_addr_for_control = (cp_ip_monitor, 5001) # Usar puerto 5001 como Engine Control Port
+                continue
 
-                try:
-                    price_f = float(price)
-                    cp_registry[current_cp_id] = {
-                        "location": location,
-                        "price": price_f,
-                        "status": STATUS_ACTIVO,
-                        'addr': cp_addr_for_control # NEW: Save CP address for Central -> CP communication
-                    }
-                    response = build_protocol_response("ACEPTADO", current_cp_id)
+            elif msg_type == "REGISTRO" and len(parts) >= 4:
+                cp_id, loc, price = parts[1], parts[2], float(parts[3])
+                current_cp_id = cp_id
+                cp_registry[cp_id] = {"location": loc, "price": price, "status": STATUS_ACTIVO, "addr": addr}
+                write_data_cp()
+                conn.sendall(build_protocol_response("ACEPTADO", cp_id))
+                _add_log(f"REGISTRO: CP {cp_id}", Colors.GREEN)
+
+            elif msg_type == "ESTADO" and len(parts) >= 3:
+                cp_id, new_status = parts[1], parts[2].upper()
+                if cp_id in cp_registry:
+                    if new_status == STATUS_AVERIA and cp_registry[cp_id]["status"] == STATUS_SUMINISTRANDO:
+                         _add_log(f"¡ALERTA! Avería en CP {cp_id} durante suministro.", Colors.BG_RED)
+                    cp_registry[cp_id]["status"] = new_status
                     write_data_cp()
-                    print("[SERVER] Charging Point registered:", cp_registry[current_cp_id])
-                except ValueError:
-                    response = build_protocol_response("RECHAZADO", "Invalid price format")
-                conn.sendall(response)
-
-            elif msg_type == "ESTADO" and len(parts) >= 2:
-                # Logica de actualizacion de estado (AVERIA, PARADO, etc. - Punto 190)
-                cp_id_report = parts[1]
-                new_status = parts[2].upper()
-                if cp_id_report in cp_registry:
-                    valid_statuses = [STATUS_ACTIVO, STATUS_PARADO, STATUS_AVERIA, STATUS_SUMINISTRANDO, STATUS_DESCONECTADO]
-                    if new_status in valid_statuses:
-                        # Punto 191: Si hay averia durante el suministro, finalizar inmediatamente
-                        if new_status == STATUS_AVERIA and cp_registry[cp_id_report]["status"] == STATUS_SUMINISTRANDO:
-                            print(f"[SERVER] AVERIA detectada durante el suministro en CP {cp_id_report}. Finalizando...")
-                            # Logica de notificacion al conductor (requiere Driver ID, no disponible aqui)
-                            # Simplificacion: se actualiza el estado, el conductor lo detectara por falta de telemetria/status
-
-                        cp_registry[cp_id_report]["status"] = new_status
-                        response = build_protocol_response("ACTUALIZADO", cp_id_report)
-                        print(f"[SERVER] Status updated for {cp_id_report}: {new_status}")
-                        write_data_cp() # Save state change
-                    else:
-                        response = build_protocol_response("RECHAZADO", "Invalid status")
-                else:
-                    response = build_protocol_response("RECHAZADO", "Unknown ID")
-                conn.sendall(response)
+                    conn.sendall(build_protocol_response("ACTUALIZADO", cp_id))
+                    _add_log(f"ESTADO CP {cp_id} -> {new_status}", Colors.YELLOW if new_status != STATUS_AVERIA else Colors.RED)
 
             elif msg_type == "AUTENTICACION" and len(parts) >= 2:
-                # Logica de Autenticacion (Punto 277)
-                cp_id_auth = parts[1]
-                if cp_id_auth in cp_registry:
-                    response = build_protocol_response("ACEPTADO", cp_id_auth)
-                    # Update address on successful re-authentication/connection
-                    cp_registry[cp_id_auth]['addr'] = (addr[0], 5001) # Update IP from connection
-                    cp_registry[cp_id_auth]['status'] = STATUS_ACTIVO
-                    print(f"[SERVER] Charging Point {cp_id_auth} authenticated and address updated.")
+                cp_id = parts[1]
+                if cp_id in cp_registry:
+                    current_cp_id = cp_id
                     
-                    write_data_cp()
+                    # CORRECCIÓN DE RECONEXIÓN
+                    current_status = cp_registry[cp_id]["status"]
+                    if current_status == STATUS_DESCONECTADO or current_status == STATUS_AVERIA:
+                         cp_registry[cp_id]["status"] = STATUS_ACTIVO
+                         write_data_cp() # Guardar el estado corregido
+                         
+                    conn.sendall(build_protocol_response("ACEPTADO", cp_id))
+                    _add_log(f"RECONEXIÓN: CP {cp_id}", Colors.CYAN)
                 else:
-                    response = build_protocol_response("RECHAZADO", "Unknown ID")
-                    print("[ERROR] Unknown ID from", addr)
-                conn.sendall(response)
-            
-            else:
-                conn.sendall(build_protocol_response("RECHAZADO", "Unknown message type"))
+                    # CORRECCIÓN DE PROTOCOLO DE REGISTRO
+                    conn.sendall(build_protocol_response("RECHAZADO", "")) # Envía RECHAZADO:
 
-    except ConnectionResetError:
-        print(f"[SERVER] {addr} disconnected unexpectedly.")
-    except Exception as e:
-        print(f"[ERROR] Exception handling client {addr}: {e}")
+    except Exception: pass
     finally:
-        # Punto 168: Si se pierde la conexion, marcar como DESCONECTADO
+        # ---
+        # --- MODIFICACIÓN SOLICITADA (Monitor Cae -> DESCONECTADO) ---
+        # ---
         if current_cp_id and current_cp_id in cp_registry:
-            cp_registry[current_cp_id]["status"] = STATUS_DESCONECTADO
-            write_data_cp() # Save state change
-            print(f"[SERVER] Charging Point {current_cp_id} marked as DESCONECTADO.")
+             # Si el monitor (cliente socket) se desconecta, marca el CP como DESCONECTADO
+             cp_registry[current_cp_id]["status"] = STATUS_DESCONECTADO
+             write_data_cp()
+             _add_log(f"DESCONEXIÓN MONITOR: CP {current_cp_id}", Colors.BG_GREY)
         conn.close()
-        print(f"[SERVER] {addr} connection closed.")
+        # ---
+        # --- FIN DE LA MODIFICACIÓN ---
+        # ---
 
-def start(port):
-    print(f"[SERVER] Server listening on {HOST}:{port}")
-    server.listen()
-    num_conections = threading.active_count() - 1
-    print("[SERVER] Number of active connections: ", num_conections)
-
-    while True:
-        conn, addr = server.accept()
-        num_conections = threading.active_count()
-        thread = threading.Thread(target=handle_client, args=(conn, addr))
-        thread.start()
-        print(f"[SERVER] Active connections: {num_conections}")
-
-# --- 6. MAIN EXECUTION ---
-if __name__ == "__main__":
-    # Configurar el socket para escuchar las conexiones de los CP Monitors (Registro/Estado)
+def socket_server_thread(port):
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    if len(sys.argv) != 4:
-        print("Uso: python EV_Central.py <IP_KAFKA> <PUERTO_KAFKA> <PUERTO_SOCKET_ESCUCHA>")
-        sys.exit(1)
-    
-    KAFKA_BROKER_ADDR = [f'{sys.argv[2]}:{sys.argv[3]}']
-
     try:
-        # Guardamos el puerto de escucha del socket
-        port_socket = int(sys.argv[1])
-    except ValueError:
-        print(f"ERROR: El puerto de escucha '{sys.argv[1]}' no es un número válido.")
-        sys.exit(1)
-
-    # --- 2. CONFIGURAR EL SOCKET ---
-    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    ADDR = (HOST, port_socket)
-
-    try:
-        server.bind(ADDR)
+        server.bind((HOST, port))
+        server.listen()
+        _add_log(f"Socket Server en puerto {port}", Colors.GREEN)
+        while True:
+            conn, addr = server.accept()
+            threading.Thread(target=handle_client, args=(conn, addr), daemon=True).start()
     except Exception as e:
-        print(f"[ERROR] Failed to bind server socket: {e}")
+         _add_log(f"FATAL SOCKET SERVER: {e}", Colors.BG_RED)
+
+# --- 6. UI RENDERER ---
+
+def ui_renderer_thread():
+    while True:
+        time.sleep(1)
+        _clear_screen()
+        print(f"{Colors.BLUE}{Colors.BOLD}*** SD EV CHARGING SOLUTION. MONITORIZATION PANEL ***{Colors.RESET}")
+        cp_ids = sorted(cp_registry.keys())
+        for i in range(0, len(cp_ids), 4):
+            row_ids = cp_ids[i:i+4]
+            # Line 1: ID
+            for cp_id in row_ids:
+                st = cp_registry[cp_id]['status']
+                bg = Colors.BG_GREY
+                if st in [STATUS_ACTIVO, STATUS_SUMINISTRANDO]: bg = Colors.BG_GREEN
+                elif st == STATUS_PARADO: bg = Colors.BG_ORANGE
+                elif st == STATUS_AVERIA: bg = Colors.BG_RED
+                print(f"{bg}{Colors.WHITE} {cp_id:^18} {Colors.RESET} ", end="")
+            print()
+            # Line 2: Location
+            for cp_id in row_ids:
+                st = cp_registry[cp_id]['status']
+                bg = Colors.BG_GREY
+                if st in [STATUS_ACTIVO, STATUS_SUMINISTRANDO]: bg = Colors.BG_GREEN
+                elif st == STATUS_PARADO: bg = Colors.BG_ORANGE
+                elif st == STATUS_AVERIA: bg = Colors.BG_RED
+                print(f"{bg}{Colors.WHITE} {cp_registry[cp_id]['location'][:18]:^18} {Colors.RESET} ", end="")
+            print()
+            # Line 3: Info/Price
+            for cp_id in row_ids:
+                st = cp_registry[cp_id]['status']
+                bg = Colors.BG_GREY
+                txt = f"{cp_registry[cp_id]['price']}€/kWh"
+                if st == STATUS_ACTIVO: bg = Colors.BG_GREEN
+                elif st == STATUS_SUMINISTRANDO:
+                    bg = Colors.BG_GREEN
+                    txt = f"Driver {cp_telemetry.get(cp_id, {}).get('driver', '?')}"
+                elif st == STATUS_PARADO: bg, txt = Colors.BG_ORANGE, "Out of Order"
+                elif st == STATUS_AVERIA: bg, txt = Colors.BG_RED, "AVERIADO"
+                elif st == STATUS_DESCONECTADO: txt = "DESCONECTADO"
+                print(f"{bg}{Colors.WHITE} {txt:^18} {Colors.RESET} ", end="")
+            print()
+            # Line 4: Telemetry (optional)
+            for cp_id in row_ids:
+                st = cp_registry[cp_id]['status']
+                bg, txt = Colors.BG_GREY, ""
+                if st == STATUS_SUMINISTRANDO and cp_id in cp_telemetry:
+                    bg = Colors.BG_GREEN
+                    tele = cp_telemetry[cp_id]
+                    txt = f"{tele['kwh']:.1f}kWh | {tele['cost']:.2f}€"
+                elif st == STATUS_ACTIVO: bg = Colors.BG_GREEN
+                elif st == STATUS_PARADO: bg = Colors.BG_ORANGE
+                elif st == STATUS_AVERIA: bg = Colors.BG_RED
+                print(f"{bg}{Colors.WHITE} {txt:^18} {Colors.RESET} ", end="")
+            print("\n")
+
+        print(f"{Colors.CYAN}{Colors.BOLD}*** ON_GOING DRIVERS REQUESTS ***{Colors.RESET}")
+        print(f"{Colors.BOLD}DATE      START TIME   User ID    CP{Colors.RESET}")
+        with UI_LOCK:
+            for r in ongoing_requests: print(f"{r['date']:<10} {r['time']:<12} {r['user_id']:<10} {r['cp_id']}")
+        print(f"\n{Colors.CYAN}{Colors.BOLD}*** APPLICATION MESSAGES ***{Colors.RESET}")
+        with UI_LOCK:
+            for log in UI_LAST_LOGS: print(log)
+        print(f"{Colors.CYAN}--------------------------------------------{Colors.RESET}")
+        print("Admin: [p ID] Parar CP | [r ID] Reanudar CP | [q] Salir")
+
+# --- 7. ADMIN INPUT LOOP ---
+def admin_input_loop():
+    while True:
+        try:
+            cmd = sys.stdin.readline().strip()
+            if not cmd: continue
+            parts = cmd.lower().split(' ')
+            
+            if parts[0] == 'q':
+                _add_log("Cerrando...", Colors.MAGENTA)
+                if KAFKA_PRODUCER: KAFKA_PRODUCER.close() # Cerrar productor al salir
+                os._exit(0)
+
+            elif parts[0] == 'p' and len(parts) >= 2: # PAUSE
+                cp_id = parts[1].upper()
+                if cp_id in cp_registry:
+                    # ---
+                    # --- MODIFICACIÓN (BUG AVERIA+PAUSA) ---
+                    # ---
+                    current_status = cp_registry[cp_id]['status'] # Obtener estado actual
+
+                    if current_status == STATUS_DESCONECTADO:
+                         _add_log(f"ERROR: CP {cp_id} está DESCONECTADO. No se puede parar.", Colors.RED)
+                         continue
+                    
+                    if current_status == STATUS_AVERIA:
+                         _add_log(f"ERROR: CP {cp_id} ya está AVERIADO. No se puede pausar.", Colors.RED)
+                         continue
+                    # ---
+                    # --- FIN DE LA MODIFICACIÓN ---
+                    # ---
+                         
+                    cp_registry[cp_id]['status'] = STATUS_PARADO
+                    write_data_cp()
+                    send_kafka_message(KAFKA_ENGINE_TOPIC, f"PAUSE:{cp_id}")
+                    _add_log(f"ADMIN: CP {cp_id} PAUSADO (Out of Order)", Colors.YELLOW)
+                else:
+                     _add_log(f"ADMIN ERROR: CP {cp_id} no encontrado", Colors.RED)
+
+            elif parts[0] == 'r' and len(parts) >= 2: # RESUME
+                cp_id = parts[1].upper()
+                if cp_id in cp_registry:
+                    if cp_registry[cp_id]['status'] == STATUS_PARADO:
+                        cp_registry[cp_id]['status'] = STATUS_ACTIVO
+                        write_data_cp()
+                        send_kafka_message(KAFKA_ENGINE_TOPIC, f"RESUME:{cp_id}")
+                        _add_log(f"ADMIN: CP {cp_id} REANUDADO a ACTIVO", Colors.GREEN)
+                    else:
+                        _add_log(f"ADMIN: CP {cp_id} no estaba PARADO", Colors.YELLOW)
+
+        except Exception: pass
+
+# --- MAIN ---
+if __name__ == "__main__":
+    if len(sys.argv) != 4:
+        print("Uso: python EV_Central.py <PUERTO_SOCKET> <IP_KAFKA> <PUERTO_KAFKA>")
         sys.exit(1)
 
-    # Hilo para escuchar mensajes de Kafka (Drivers y Telemetria)
-    kafka_thread = threading.Thread(target=read_consumer, daemon=True)
-    kafka_thread.start()
-    
-    print("[SERVER] Starting EV_Central...")
+    SOCKET_PORT = int(sys.argv[1])
+    KAFKA_BROKER_ADDR = [f'{sys.argv[2]}:{sys.argv[3]}'] # Guardar globalmente
+
+    # --- NUEVO: Inicializar el productor ---
+    if not _initialize_producer():
+        print("Fallo crítico al inicializar el productor de Kafka. Saliendo.")
+        sys.exit(1)
+    # ---
+
     reset_cp_state()
     read_data_cp()
     read_data_driver()
-    
+
+    threading.Thread(target=read_consumer, daemon=True).start()
+    threading.Thread(target=socket_server_thread, args=(SOCKET_PORT,), daemon=True).start()
+    threading.Thread(target=ui_renderer_thread, daemon=True).start()
+
     try:
-        start(port_socket) # Iniciar el servidor de Sockets para CPs
+        admin_input_loop()
     except KeyboardInterrupt:
-        print("\n[SERVER] Shutting down server...")
+        if KAFKA_PRODUCER: KAFKA_PRODUCER.close() # Cerrar productor al salir
         write_data_cp()
-        server.close()
         sys.exit(0)
